@@ -1,0 +1,452 @@
+# ============================================================
+# BLOCK 18 of 20: Forecasting Models — Prophet, SARIMA, LSTM, Holt-Winters, Ensemble
+# ============================================================
+
+# ----- Original Cell #80 -----
+# STEP 5 — MODEL 1: PROPHET
+
+!pip install prophet -q
+from prophet import Prophet
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+# Prophet requires columns named 'ds' (date) and 'y' (value)
+prophet_train = train[['Date', TARGET]].rename(columns={'Date': 'ds', TARGET: 'y'})
+
+# Fit model
+m = Prophet(yearly_seasonality=True, weekly_seasonality=False, daily_seasonality=False)
+m.fit(prophet_train)
+
+# Forecast 12 months ahead
+future       = m.make_future_dataframe(periods=FORECAST_HORIZON, freq='MS')
+prophet_fc   = m.predict(future)
+prophet_pred = prophet_fc[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(FORECAST_HORIZON)
+
+# Evaluate
+prophet_mae  = mean_absolute_error(test[TARGET], prophet_pred['yhat'])
+prophet_rmse = np.sqrt(mean_squared_error(test[TARGET], prophet_pred['yhat']))
+
+print("Prophet Predictions vs Actual:")
+print(pd.DataFrame({
+    'Date': test['Date'].values,
+    'Actual': test[TARGET].values,
+    'Predicted': prophet_pred['yhat'].values.round(0)
+}).to_string(index=False))
+
+print(f"\nProphet  → MAE: {prophet_mae:.1f}  |  RMSE: {prophet_rmse:.1f}")
+print("\nStep 5 Complete — Prophet model trained & evaluated")
+
+avg_actual = test[TARGET].mean()
+mape = (abs(test[TARGET].values - prophet_pred['yhat'].values) / test[TARGET].values).mean() * 100
+print(f"Average actual value: {avg_actual:.0f}")
+print(f"MAPE: {mape:.1f}%")
+
+# ----- Original Cell #81 -----
+# STEP 6 — MODEL 2: SARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+def diagnose_model(m):
+    cov = m.cov_params().values
+    cond_ok = np.isfinite(cov).all()
+    diag = np.diag(cov)
+    variances_ok = (diag > 1e-6).all()
+    ll_suspicious = abs(m.llf) < 1e-3
+    return cond_ok and variances_ok and not ll_suspicious
+
+sarima_model = SARIMAX(
+    train[TARGET],
+    order=(1, 1, 1),
+    seasonal_order=(1, 1, 1, 12),
+    enforce_stationarity=False,
+    enforce_invertibility=False
+)
+sarima_fit  = sarima_model.fit(disp=False)
+
+print("Model trustworthy:", diagnose_model(sarima_fit))
+print(f"Log-Likelihood: {sarima_fit.llf:.4f}")
+print(f"AIC: {sarima_fit.aic:.4f}")
+
+sarima_pred = sarima_fit.forecast(steps=FORECAST_HORIZON)
+sarima_mae  = mean_absolute_error(test[TARGET], sarima_pred)
+sarima_rmse = np.sqrt(mean_squared_error(test[TARGET], sarima_pred))
+
+print("\nSARIMA Predictions vs Actual:")
+print(pd.DataFrame({
+    'Date': test['Date'].values,
+    'Actual': test[TARGET].values,
+    'Predicted': sarima_pred.values.round(0)
+}).to_string(index=False))
+print(f"\nSARIMA  → MAE: {sarima_mae:.1f}  |  RMSE: {sarima_rmse:.1f}")
+print("\nStep 6 Complete — SARIMA model trained & evaluated")
+
+# ----- Original Cell #82 -----
+cov = sarima_fit.cov_params().values
+cond_ok = np.isfinite(cov).all()
+diag = np.diag(cov)
+variances_ok = (diag > 1e-6).all()
+ll_suspicious = abs(sarima_fit.llf) < 1e-3
+
+print(f"cond_ok (all covariance values finite): {cond_ok}")
+print(f"variances_ok (all diagonal variances > 1e-6): {variances_ok}")
+print(f"ll_suspicious (log-likelihood near zero): {ll_suspicious}")
+
+if not variances_ok:
+    print("\nDiagonal variances:")
+    print(diag)
+
+# ----- Original Cell #83 -----
+print("Parameter names in order:")
+print(sarima_fit.param_names)
+print("\nCoefficients:")
+print(sarima_fit.params)
+print("\nStandard errors:")
+print(sarima_fit.bse)
+
+# ----- Original Cell #84 -----
+sarima_model_v2 = SARIMAX(
+    train[TARGET],
+    order=(1, 1, 1),
+    seasonal_order=(1, 1, 0, 12),
+    enforce_stationarity=False,
+    enforce_invertibility=False
+)
+sarima_fit_v2 = sarima_model_v2.fit(disp=False)
+
+print("Model trustworthy:", diagnose_model(sarima_fit_v2))
+print(f"Log-Likelihood: {sarima_fit_v2.llf:.4f}  |  AIC: {sarima_fit_v2.aic:.4f}")
+print("\nCoefficients:")
+print(sarima_fit_v2.params)
+print("\nStandard errors:")
+print(sarima_fit_v2.bse)
+
+pred_v2 = sarima_fit_v2.forecast(steps=FORECAST_HORIZON)
+mae_v2 = mean_absolute_error(test[TARGET], pred_v2)
+rmse_v2 = np.sqrt(mean_squared_error(test[TARGET], pred_v2))
+print(f"\nMAE: {mae_v2:.1f}  |  RMSE: {rmse_v2:.1f}")
+
+# ----- Original Cell #85 -----
+sarima_model_v3 = SARIMAX(
+    train[TARGET],
+    order=(1, 1, 1),
+    seasonal_order=(0, 1, 1, 12),
+    enforce_stationarity=False,
+    enforce_invertibility=False
+)
+sarima_fit_v3 = sarima_model_v3.fit(disp=False)
+
+print("Model trustworthy:", diagnose_model(sarima_fit_v3))
+print(f"Log-Likelihood: {sarima_fit_v3.llf:.4f}  |  AIC: {sarima_fit_v3.aic:.4f}")
+
+pred_v3 = sarima_fit_v3.forecast(steps=FORECAST_HORIZON)
+mae_v3 = mean_absolute_error(test[TARGET], pred_v3)
+print(f"MAE: {mae_v3:.1f}")
+
+# ----- Original Cell #86 -----
+# STEP 6b — MODEL 4: SARIMA GRID SEARCH (TUNING, with trustworthiness filter)
+import itertools
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+def diagnose_model(m):
+    cov = m.cov_params().values
+    cond_ok = np.isfinite(cov).all()
+    diag = np.diag(cov)
+    variances_ok = (diag > 1e-6).all()
+    ll_suspicious = abs(m.llf) < 1e-3
+    return cond_ok and variances_ok and not ll_suspicious
+
+p = d = q = range(0, 2)
+pdq = list(itertools.product(p, d, q))
+seasonal_options = [(1,1,1,12), (0,1,1,12), (1,1,0,12), (1,0,1,12), (0,1,0,12)]
+
+all_results = []
+for param in pdq:
+    for seasonal in seasonal_options:
+        try:
+            mod = SARIMAX(
+                train[TARGET],
+                order=param,
+                seasonal_order=seasonal,
+                enforce_stationarity=False,
+                enforce_invertibility=False
+            )
+            res = mod.fit(disp=False)
+            trustworthy = diagnose_model(res)
+            all_results.append({
+                'order': param,
+                'seasonal': seasonal,
+                'AIC': res.aic,
+                'LogLik': res.llf,
+                'Trustworthy': trustworthy
+            })
+        except Exception as e:
+            # Skip failed fits (e.g. non-convergence), but don't hide unexpected errors silently
+            continue
+
+results_df = pd.DataFrame(all_results).sort_values('AIC').reset_index(drop=True)
+print(f"results_df created — {len(results_df)} models ranked by AIC (including untrustworthy ones)")
+print(results_df.head(10))
+
+# CRITICAL: only select the best model AMONG TRUSTWORTHY ones
+trustworthy_df = results_df[results_df['Trustworthy'] == True].reset_index(drop=True)
+print(f"\nTrustworthy models: {len(trustworthy_df)} of {len(results_df)}")
+print(trustworthy_df.head(10))
+
+if len(trustworthy_df) == 0:
+    print("\nWARNING: No trustworthy models found in grid search!")
+else:
+    best_row = trustworthy_df.iloc[0]
+    best_order, best_seasonal, best_aic = best_row['order'], best_row['seasonal'], best_row['AIC']
+    print(f"\nBest TRUSTWORTHY order: {best_order}")
+    print(f"Best TRUSTWORTHY seasonal order: {best_seasonal}")
+    print(f"Best TRUSTWORTHY AIC: {best_aic:.1f}")
+
+    sarima_tuned = SARIMAX(
+        train[TARGET], order=best_order, seasonal_order=best_seasonal,
+        enforce_stationarity=False, enforce_invertibility=False
+    )
+    sarima_tuned_fit  = sarima_tuned.fit(disp=False)
+    print(f"\nFinal check — Trustworthy: {diagnose_model(sarima_tuned_fit)}")
+
+    sarima_tuned_pred = sarima_tuned_fit.forecast(steps=FORECAST_HORIZON)
+    sarima_tuned_mae  = mean_absolute_error(test[TARGET], sarima_tuned_pred)
+    sarima_tuned_rmse = np.sqrt(mean_squared_error(test[TARGET], sarima_tuned_pred))
+
+    print("\nTuned (trustworthy) SARIMA Predictions vs Actual:")
+    print(pd.DataFrame({
+        'Date': test['Date'].values,
+        'Actual': test[TARGET].values,
+        'Predicted': sarima_tuned_pred.values.round(0)
+    }).to_string(index=False))
+    print(f"\nTuned SARIMA → MAE: {sarima_tuned_mae:.1f}  |  RMSE: {sarima_tuned_rmse:.1f}")
+
+print("\nStep 6 Complete — SARIMA tuned & evaluated")
+
+# ----- Original Cell #87 -----
+# STEP 6c — FULL MODEL COMPARISON (updated with validated SARIMA variants from Step 6)
+candidates = {
+    'Naive Seasonal (0,1,0)(0,1,0,12)': ((0,1,0), (0,1,0,12)),
+    'Seasonal MA only (0,1,0)(0,1,1,12)': ((0,1,0), (0,1,1,12)),
+    'Non-seasonal only (1,1,1)(0,0,0,0)': ((1,1,1), (0,0,0,0)),
+    'Simple trend (0,1,1)(0,0,0,0)': ((0,1,1), (0,0,0,0)),
+    'Full SARIMA (1,1,1)(1,1,1,12)': ((1,1,1), (1,1,1,12)),
+    'Seasonal AR only (1,1,1)(1,1,0,12)': ((1,1,1), (1,1,0,12)),   # <-- the trustworthy one from Step 6
+    'Seasonal MA only, w/ ARMA (1,1,1)(0,1,1,12)': ((1,1,1), (0,1,1,12)),  # <-- the unstable one
+}
+
+def diagnose_model(m):
+    cov = m.cov_params().values
+    cond_ok = np.isfinite(cov).all()
+    diag = np.diag(cov)
+    variances_ok = (diag > 1e-6).all()
+    ll_suspicious = abs(m.llf) < 1e-3
+    return cond_ok and variances_ok and not ll_suspicious
+
+results = []
+for name, (order, sorder) in candidates.items():
+    try:
+        m = SARIMAX(train[TARGET], order=order, seasonal_order=sorder,
+                     enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
+        pred = m.forecast(steps=FORECAST_HORIZON)
+        mae = mean_absolute_error(test[TARGET], pred)
+        trustworthy = diagnose_model(m)
+        results.append({'Model': name, 'AIC': m.aic, 'LogLik': m.llf,
+                         'MAE': mae, 'Trustworthy': trustworthy})
+    except Exception as e:
+        results.append({'Model': name, 'AIC': np.nan, 'LogLik': np.nan,
+                         'MAE': np.nan, 'Trustworthy': f'FAILED: {e}'})
+
+results_df = pd.DataFrame(results).sort_values('AIC')
+print(results_df.to_string(index=False))
+
+# ----- Original Cell #88 -----
+# STEP 6d — TOP SARIMA CANDIDATES
+def calc_mape(actual, predicted):
+    actual = np.array(actual)
+    predicted = np.array(predicted)
+    return np.mean(np.abs((actual - predicted) / actual)) * 100
+
+top_candidates = trustworthy_df.head(5)
+candidate_results = []
+for _, row in top_candidates.iterrows():
+    order = row['order']
+    seasonal = row['seasonal']
+    try:
+        mod = SARIMAX(
+            train[TARGET],
+            order=order,
+            seasonal_order=seasonal,
+            enforce_stationarity=False,
+            enforce_invertibility=False
+        )
+        fit = mod.fit(disp=False)
+        pred = fit.forecast(steps=FORECAST_HORIZON)
+        mae  = mean_absolute_error(test[TARGET], pred)
+        rmse = np.sqrt(mean_squared_error(test[TARGET], pred))
+        mape = calc_mape(test[TARGET].values, pred.values)
+        candidate_results.append({
+            'order': order, 'seasonal': seasonal,
+            'AIC': row['AIC'], 'MAE': mae, 'RMSE': rmse, 'MAPE': mape,
+            'Trustworthy': True
+        })
+    except:
+        continue
+
+candidates_df = pd.DataFrame(candidate_results).sort_values('MAPE').reset_index(drop=True)
+pretty(candidates_df, "SARIMA Candidates — Real Test-Set Accuracy (Trustworthy Only)", 1,
+       format_cols={'MAE': 'float2', 'RMSE': 'float2', 'MAPE': 'pct2'})
+print("\nStep 6d Complete")
+
+# ----- Original Cell #89 -----
+# STEP 7 — MODEL 3: LSTM (fixed: scaler fit on TRAIN only, no test leakage)
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+scaler = MinMaxScaler()
+scaler.fit(train[[TARGET]])
+
+full_series = monthly[TARGET].values.reshape(-1, 1)
+scaled = scaler.transform(full_series)
+
+LOOKBACK = 6
+
+def make_sequences(data, lookback):
+    X, y = [], []
+    for i in range(lookback, len(data)):
+        X.append(data[i-lookback:i, 0])
+        y.append(data[i, 0])
+    return np.array(X), np.array(y)
+
+X_all, y_all = make_sequences(scaled, LOOKBACK)
+split = len(X_all) - FORECAST_HORIZON
+X_tr, y_tr = X_all[:split], y_all[:split]
+X_te, y_te = X_all[split:], y_all[split:]
+
+print(f"Training sequences: {X_tr.shape[0]}")
+print(f"Testing sequences: {X_te.shape[0]}")
+
+X_tr = X_tr.reshape((X_tr.shape[0], X_tr.shape[1], 1))
+X_te = X_te.reshape((X_te.shape[0], X_te.shape[1], 1))
+
+lstm_model = Sequential([
+    LSTM(64, activation='relu', input_shape=(LOOKBACK, 1)),
+    Dense(1)
+])
+lstm_model.compile(optimizer='adam', loss='mse')
+lstm_model.fit(X_tr, y_tr, epochs=100, batch_size=4, verbose=0)
+
+lstm_pred_scaled = lstm_model.predict(X_te)
+lstm_pred   = scaler.inverse_transform(lstm_pred_scaled).flatten()
+lstm_actual = scaler.inverse_transform(y_te.reshape(-1, 1)).flatten()
+
+lstm_mae  = mean_absolute_error(lstm_actual, lstm_pred)
+lstm_rmse = np.sqrt(mean_squared_error(lstm_actual, lstm_pred))
+
+print("\nLSTM Predictions vs Actual:")
+print(pd.DataFrame({
+    'Actual': lstm_actual.round(0),
+    'Predicted': lstm_pred.round(0)
+}).to_string(index=False))
+print(f"\nLSTM  → MAE: {lstm_mae:.1f}  |  RMSE: {lstm_rmse:.1f}")
+print("\nStep 7 Complete — LSTM model trained & evaluated")
+
+# ----- Original Cell #90 -----
+from tensorflow.keras.callbacks import EarlyStopping
+
+lstm_model = Sequential([
+    LSTM(16, activation='tanh', input_shape=(LOOKBACK, 1)),  # smaller, tanh (more standard for LSTM)
+    Dense(1)
+])
+lstm_model.compile(optimizer='adam', loss='mse')
+
+early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+lstm_model.fit(X_tr, y_tr, epochs=200, batch_size=4, verbose=0, callbacks=[early_stop])
+
+lstm_pred_scaled = lstm_model.predict(X_te)
+lstm_pred   = scaler.inverse_transform(lstm_pred_scaled).flatten()
+lstm_actual = scaler.inverse_transform(y_te.reshape(-1, 1)).flatten()
+
+lstm_mae  = mean_absolute_error(lstm_actual, lstm_pred)
+lstm_rmse = np.sqrt(mean_squared_error(lstm_actual, lstm_pred))
+print(f"LSTM (smaller, early-stopped) → MAE: {lstm_mae:.1f}  |  RMSE: {lstm_rmse:.1f}")
+
+# ----- Original Cell #91 -----
+maes = []
+for i in range(5):
+    m = Sequential([LSTM(16, activation='tanh', input_shape=(LOOKBACK, 1)), Dense(1)])
+    m.compile(optimizer='adam', loss='mse')
+    es = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    m.fit(X_tr, y_tr, epochs=200, batch_size=4, verbose=0, callbacks=[es])
+    p = scaler.inverse_transform(m.predict(X_te, verbose=0)).flatten()
+    a = scaler.inverse_transform(y_te.reshape(-1,1)).flatten()
+    maes.append(mean_absolute_error(a, p))
+
+print(f"MAE across 5 runs: {[round(x,1) for x in maes]}")
+print(f"Mean: {np.mean(maes):.1f}  |  Std: {np.std(maes):.1f}")
+
+# ----- Original Cell #92 -----
+# STEP 8 — MODEL 4: HOLT-WINTERS (EXPONENTIAL SMOOTHING)
+
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+hw_model = ExponentialSmoothing(
+    train[TARGET],
+    trend='add',
+    seasonal='add',
+    seasonal_periods=12
+)
+hw_fit  = hw_model.fit()
+hw_pred = hw_fit.forecast(FORECAST_HORIZON)
+
+hw_mae  = mean_absolute_error(test[TARGET], hw_pred)
+hw_rmse = np.sqrt(mean_squared_error(test[TARGET], hw_pred))
+
+print("Holt-Winters Predictions vs Actual:")
+print(pd.DataFrame({
+    'Date': test['Date'].values,
+    'Actual': test[TARGET].values,
+    'Predicted': hw_pred.values.round(0)
+}).to_string(index=False))
+
+print(f"\nHolt-Winters → MAE: {hw_mae:.1f}  |  RMSE: {hw_rmse:.1f}")
+print("\nStep 8 Complete — Holt-Winters trained & evaluated")
+
+# ----- Original Cell #93 -----
+hw_model_mul = ExponentialSmoothing(
+    train[TARGET],
+    trend='add',
+    seasonal='mul',
+    seasonal_periods=12
+)
+hw_fit_mul  = hw_model_mul.fit()
+hw_pred_mul = hw_fit_mul.forecast(FORECAST_HORIZON)
+hw_mae_mul  = mean_absolute_error(test[TARGET], hw_pred_mul)
+hw_rmse_mul = np.sqrt(mean_squared_error(test[TARGET], hw_pred_mul))
+
+print("Holt-Winters (multiplicative) Predictions vs Actual:")
+print(pd.DataFrame({
+    'Date': test['Date'].values,
+    'Actual': test[TARGET].values,
+    'Predicted': hw_pred_mul.values.round(0)
+}).to_string(index=False))
+print(f"\nHolt-Winters (mul) → MAE: {hw_mae_mul:.1f}  |  RMSE: {hw_rmse_mul:.1f}")
+
+# ----- Original Cell #94 -----
+# STEP 9a — ENSEMBLE: HOLT-WINTERS (multiplicative) + PROPHET AVERAGE
+ensemble_pred_hw_prophet = (hw_pred_mul.values + prophet_pred['yhat'].values) / 2
+ensemble_mae_hw  = mean_absolute_error(test[TARGET], ensemble_pred_hw_prophet)
+ensemble_rmse_hw = np.sqrt(mean_squared_error(test[TARGET], ensemble_pred_hw_prophet))
+
+print("Ensemble (Holt-Winters + Prophet) Predictions vs Actual:")
+print(pd.DataFrame({
+    'Date': test['Date'].values,
+    'Actual': test[TARGET].values,
+    'HoltWinters': hw_pred_mul.values.round(0),
+    'Prophet': prophet_pred['yhat'].values.round(0),
+    'Ensemble': ensemble_pred_hw_prophet.round(0)
+}).to_string(index=False))
+
+print(f"\nEnsemble (HW+Prophet) → MAE: {ensemble_mae_hw:.1f}  |  RMSE: {ensemble_rmse_hw:.1f}")
+print(f"Holt-Winters alone     → MAE: {hw_mae_mul:.1f}  |  RMSE: {hw_rmse_mul:.1f}")
+print(f"Prophet alone          → MAE: {prophet_mae:.1f}  |  RMSE: {prophet_rmse:.1f}")
+
+print("\nStep 9a Complete — Ensemble evaluated")
