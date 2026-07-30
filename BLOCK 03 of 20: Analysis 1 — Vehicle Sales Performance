@@ -1,0 +1,316 @@
+# ============================================================
+# BLOCK 03 of 20: Analysis 1 — Vehicle Sales Performance
+# ============================================================
+
+# ----- Original Cell #5 -----
+# ANALYSIS 1: Vehicle Sales Performance
+from IPython.display import display
+
+# Refresh fuel_perf with updated Dim_Vehicle data
+sales_vehicle = fvs.merge(dim_vehicle, on="VehicleKey", how="left")
+fuel_perf = (
+    sales_vehicle.groupby("FuelType")
+    .agg(TotalRevenue=("SaleAmount","sum"), UnitsSold=("UnitsSold","sum"))
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+fuel_perf["RevenueShare%"] = (fuel_perf["TotalRevenue"] / fuel_perf["TotalRevenue"].sum() * 100).round(2)
+print("Refreshed fuel_perf:")
+print(fuel_perf.to_string(index=False))
+
+# 1a. By Brand
+brand_perf = (
+    sales_vehicle
+    .groupby("Brand")
+    .agg(TotalRevenue=("SaleAmount","sum"), UnitsSold=("UnitsSold","sum"),
+         AvgPrice=("SaleAmount","mean"), AvgDiscount=("Discount","mean"))
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+brand_perf["RevenueShare%"] = (brand_perf["TotalRevenue"] / brand_perf["TotalRevenue"].sum() * 100).round(2)
+brand_perf.index = range(1, len(brand_perf) + 1)
+
+print("  1.1. Revenue by Brand")
+display(
+    brand_perf.style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}",
+        "AvgPrice": "${:,.0f}",
+        "AvgDiscount": "${:,.0f}",
+        "RevenueShare%": "{:.2f}%"
+    })
+)
+
+# 1b. By Fuel Type
+fuel_perf = (
+    sales_vehicle
+    .groupby("FuelType")
+    .agg(TotalRevenue=("SaleAmount","sum"), UnitsSold=("UnitsSold","sum"))
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+fuel_perf["RevenueShare%"] = (fuel_perf["TotalRevenue"] / fuel_perf["TotalRevenue"].sum() * 100).round(2)
+fuel_perf.index = range(1, len(fuel_perf) + 1)
+
+print("  1.2. Revenue by Fuel Type")
+display(
+    fuel_perf.style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}",
+        "RevenueShare%": "{:.2f}%"
+    })
+)
+
+# 1c. By Body Type
+body_perf = (
+    sales_vehicle
+    .groupby("BodyType")
+    .agg(TotalRevenue=("SaleAmount","sum"), UnitsSold=("UnitsSold","sum"))
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+body_perf["RevenueShare%"] = (body_perf["TotalRevenue"] / body_perf["TotalRevenue"].sum() * 100).round(2)
+body_perf.index = range(1, len(body_perf) + 1)
+
+print("  1.3. Revenue by Body Type")
+display(
+    body_perf.style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}",
+        "RevenueShare%": "{:.2f}%"
+    })
+)
+
+# 1d. Top 15 Models
+model_perf = (
+    sales_vehicle
+    .groupby(["Brand","Model"])
+    .agg(TotalRevenue=("SaleAmount","sum"), UnitsSold=("UnitsSold","sum"),
+         AvgPrice=("SaleAmount","mean"), AvgDiscount=("Discount","mean"))
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+
+top15_models = model_perf.head(15).copy()
+top15_models.index = range(1, len(top15_models) + 1)
+
+print("  1.4. Top 15 Models by Revenue")
+display(
+    top15_models.style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}",
+        "AvgPrice": "${:,.0f}",
+        "AvgDiscount": "${:,.0f}"
+    })
+)
+
+# 1e. Most discounted models
+over_discount = model_perf.sort_values("AvgDiscount", ascending=False).head(10)
+over_discount.index = range(1, len(over_discount) + 1)
+
+print("  1.5. Top 10 Most Discounted Models (Margin Alert)")
+display(
+    over_discount[["Brand","Model","AvgDiscount","TotalRevenue","UnitsSold"]]
+    .style.format({
+        "AvgDiscount": "${:,.0f}",
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}"
+    })
+)
+
+fvs_model = fvs.merge(dim_vehicle[['VehicleKey', 'Brand', 'Model', 'FuelType']],
+                       on='VehicleKey', how='left')
+fvs_model['Date'] = pd.to_datetime(fvs_model['DateKey'].astype(str), format='%Y%m%d')
+fvs_model['YearMonth'] = fvs_model['Date'].dt.to_period('M').dt.to_timestamp()
+
+model_monthly = (fvs_model
+                 .groupby(['YearMonth', 'Model'])['UnitsSold']
+                 .sum()
+                 .reset_index()
+                 .rename(columns={'YearMonth': 'Date'}))
+
+model_monthly = model_monthly[model_monthly['Model'].apply(lambda x: isinstance(x, str))]
+print(f"model_monthly rebuilt — {model_monthly['Model'].nunique()} models, {len(model_monthly)} rows")
+
+# TABLE: All 154 models — total units, avg monthly, peak month, fuel type
+model_summary = (fvs_model.groupby(['Model', 'FuelType'])
+                 .agg(Total_Units=('UnitsSold', 'sum'))
+                 .reset_index())
+
+model_summary['Avg_Monthly_Volume'] = (model_summary['Total_Units'] / 24).round(1)
+
+peak_month = (fvs_model.groupby(['Model', 'YearMonth'])['UnitsSold']
+              .sum()
+              .reset_index()
+              .sort_values('UnitsSold', ascending=False)
+              .drop_duplicates('Model')
+              [['Model', 'YearMonth', 'UnitsSold']]
+              .rename(columns={'YearMonth': 'Peak_Month', 'UnitsSold': 'Peak_Month_Units'}))
+peak_month['Peak_Month'] = peak_month['Peak_Month'].dt.strftime('%b %Y')
+
+model_summary_table = (model_summary
+                       .merge(peak_month, on='Model', how='left')
+                       .sort_values('Total_Units', ascending=False)
+                       .reset_index(drop=True))
+
+model_summary_table = model_summary_table[
+    ['Model', 'FuelType', 'Total_Units', 'Avg_Monthly_Volume', 'Peak_Month', 'Peak_Month_Units']
+]
+
+pd.set_option('display.max_rows', None)
+pd.set_option('display.width', 200)
+print(f"\n{'='*90}")
+print(f"  ALL {model_summary_table['Model'].nunique()} MODELS — FULL SUMMARY TABLE")
+print(f"{'='*90}")
+print(model_summary_table.to_string(index=False))
+
+model_summary_table.to_csv('all_models_summary_table.csv', index=False)
+print(f"\nSaved to all_models_summary_table.csv")
+
+
+# Chart 1: Top 10 Brands by Revenue
+fig, ax = plt.subplots(figsize=(11, 6))
+top10_brands_rev = brand_perf.head(10)
+vals   = top10_brands_rev["TotalRevenue"][::-1].values
+labels = top10_brands_rev["Brand"][::-1].values
+
+bars = ax.barh(labels, vals, color="#2E75B6")
+for bar, val in zip(bars, vals):
+    ax.text(bar.get_width() + bar.get_width()*0.01,
+            bar.get_y() + bar.get_height()/2,
+            f"${val:,.0f}", va="center", ha="left", fontsize=9)
+
+ax.plot(vals, range(len(vals)), color="#F4C542",
+        marker="o", linewidth=2, markersize=6, label="Trend")
+
+ax.set_title("Top 10 Brands by Revenue", fontsize=14, fontweight="bold")
+ax.set_xlabel("Total Revenue ($)")
+ax.margins(x=0.22)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a1_chart1_brand_revenue.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 2: Revenue Share by Fuel Type
+fig, ax = plt.subplots(figsize=(9, 6))
+colors_pie = ["#E63946","#2A9D8F","#E9C46A","#F4A261","#457B9D"]
+total = fuel_perf["TotalRevenue"].sum()
+wedges, texts, autotexts = ax.pie(
+    fuel_perf["TotalRevenue"],
+    labels=fuel_perf["FuelType"],
+    autopct=lambda p: f"{p:.1f}%\n${p/100*total:,.0f}",
+    startangle=90,
+    colors=colors_pie[:len(fuel_perf)],
+    wedgeprops={"edgecolor":"white","linewidth":2},
+    pctdistance=0.6,
+    labeldistance=1.15,
+    explode=[0.03]*len(fuel_perf),
+)
+for text in texts:
+    text.set_fontsize(12)
+    text.set_fontweight("bold")
+    text.set_color("#1a1a1a")
+for autotext in autotexts:
+    autotext.set_fontsize(10)
+    autotext.set_color("000000")
+    autotext.set_linespacing(1.8)
+ax.set_title("Revenue Share by Fuel Type", fontsize=14, fontweight="bold", pad=20)
+plt.tight_layout()
+plt.savefig("/content/a1_chart2_fuel_type.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 3: Units Sold by Body Type
+fig, ax = plt.subplots(figsize=(9, 5))
+vals   = body_perf["UnitsSold"][::-1].values
+labels = body_perf["BodyType"][::-1].values
+
+bars = ax.barh(labels, vals, color="#1F3864")
+for bar, val in zip(bars, vals):
+    ax.text(bar.get_width() + bar.get_width()*0.01,
+            bar.get_y() + bar.get_height()/2,
+            f"{int(val):,}", va="center", ha="left", fontsize=10)
+
+ax.plot(vals, range(len(vals)), color="#F4C542",
+        marker="o", linewidth=2, markersize=6, label="Trend")
+
+ax.set_title("Units Sold by Body Type", fontsize=14, fontweight="bold")
+ax.set_xlabel("Units Sold")
+ax.margins(x=0.18)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a1_chart3_body_type.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 4: Top 10 Models by Revenue
+fig, ax = plt.subplots(figsize=(12, 6))
+top10m = model_perf.head(10)
+labels = (top10m["Brand"] + " " + top10m["Model"])[::-1].values
+vals   = top10m["TotalRevenue"][::-1].values
+
+bars = ax.barh(labels, vals, color="#70AD47")
+for bar, val in zip(bars, vals):
+    ax.text(bar.get_width() + bar.get_width()*0.01,
+            bar.get_y() + bar.get_height()/2,
+            f"${val:,.0f}", va="center", ha="left", fontsize=9)
+
+ax.plot(vals, range(len(vals)), color="#F4C542",
+        marker="o", linewidth=2, markersize=6, label="Trend")
+
+ax.set_title("Top 10 Models by Revenue", fontsize=14, fontweight="bold")
+ax.set_xlabel("Revenue ($)")
+ax.margins(x=0.22)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a1_chart4_top_models.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 5: Top 10 Models by Units Sold
+top10 = (model_monthly.groupby('Model')['UnitsSold']
+         .sum()
+         .sort_values(ascending=False)
+         .head(10))
+
+fig, ax = plt.subplots(figsize=(10, 6))
+bars = ax.barh(top10.index[::-1], top10.values[::-1], color='steelblue')
+
+for bar, val in zip(bars, top10.values[::-1]):
+    ax.text(val + max(top10.values)*0.01, bar.get_y() + bar.get_height()/2,
+            f'{val:,}', va='center', fontsize=10, fontweight='bold')
+
+ax.set_title('Top 10 Models by Units Sold', fontsize=14, fontweight='bold')
+ax.set_xlabel('Units Sold')
+ax.set_ylabel('Car Model')
+print(f"\nTop 10 Models:\n{top10}")
+
+plt.tight_layout()
+plt.savefig('top10_models_units_sold.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Chart 6: Sales by Fuel Type (pie)
+fvs_fuel = fvs.merge(dim_vehicle[['VehicleKey', 'FuelType']], on='VehicleKey', how='left')
+
+fuel_sales = (fvs_fuel.groupby('FuelType')['UnitsSold']
+              .sum()
+              .sort_values(ascending=False))
+
+fig, ax = plt.subplots(figsize=(8, 8))
+colors = ['steelblue', 'tomato', 'seagreen', 'darkorange', 'purple', 'goldenrod']
+
+wedges, texts, autotexts = ax.pie(
+    fuel_sales.values,
+    labels=fuel_sales.index,
+    autopct=lambda pct: f'{pct:.1f}%\n({int(pct/100*fuel_sales.sum()):,})',
+    colors=colors[:len(fuel_sales)],
+    startangle=90,
+    textprops={'fontsize': 10}
+)
+
+ax.set_title('Sales by Fuel Type', fontsize=14, fontweight='bold')
+print(f"\nSales by Fuel Type:\n{fuel_sales}")
+
+plt.tight_layout()
+plt.savefig('sales_by_fuel_type.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+
+print("Analysis 1 complete")
