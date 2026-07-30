@@ -1,0 +1,319 @@
+# ============================================================
+# BLOCK 05 of 20: Analysis 3 — Campaign ROI & Conversion Funnel
+# ============================================================
+
+# ----- Original Cell #7 -----
+# ANALYSIS 3: Campaign ROI & Conversion Funnel
+import matplotlib.ticker as mticker
+camp_data = (
+    fmc
+    .merge(dim_campaign, on="CampaignKey", how="left")
+    .merge(dim_channel[["ChannelKey","ChannelName"]], on="ChannelKey", how="left")
+)
+
+camp_data["ROI_pct"]        = ((camp_data["RevenueGenerated"] - camp_data["CampaignCost"]) / camp_data["CampaignCost"] * 100).round(2)
+camp_data["ImpToLead_pct"]  = (camp_data["Leads"]     / camp_data["Impressions"] * 100).round(3)
+camp_data["LeadToTD_pct"]   = (camp_data["TestDrives"] / camp_data["Leads"]       * 100).round(2)
+camp_data["TDToBook_pct"]   = (camp_data["Bookings"]   / camp_data["TestDrives"]  * 100).round(2)
+camp_data["CostPerLead"]    = (camp_data["CampaignCost"] / camp_data["Leads"]).round(2)
+camp_data["CostPerBooking"] = (camp_data["CampaignCost"] / camp_data["Bookings"]).round(2)
+
+
+# 3a. Funnel summary
+total_imp  = camp_data["Impressions"].sum()
+total_lead = camp_data["Leads"].sum()
+total_td   = camp_data["TestDrives"].sum()
+total_book = camp_data["Bookings"].sum()
+total_cost = camp_data["CampaignCost"].sum()
+total_rev  = camp_data["RevenueGenerated"].sum()
+
+funnel_df = pd.DataFrame({
+    "Metric": ["Impressions", "Leads", "Test Drives", "Bookings"],
+    "Value": [total_imp, total_lead, total_td, total_book],
+    "Conversion Rate": [
+        "100%",
+        f"{total_lead/total_imp*100:.3f}%",
+        f"{total_td/total_lead*100:.2f}% of leads",
+        f"{total_book/total_td*100:.2f}% of TDs"
+    ]
+})
+
+funnel_df.index = range(1, len(funnel_df) + 1)
+
+print("  3.1. Overall Conversion Funnel")
+display(funnel_df)
+
+
+# 3b. By Campaign Type
+roi_summary = pd.DataFrame({
+    "Metric": ["Total Spend","Total Revenue","Overall ROI","Cost per Lead","Cost per Booking"],
+    "Value": [
+        total_cost,
+        total_rev,
+        (total_rev-total_cost)/total_cost*100,
+        total_cost/total_lead,
+        total_cost/total_book
+    ]
+})
+
+roi_summary.index = range(1, len(roi_summary) + 1)
+
+print("  3.2. Overall Campaign Financial Summary")
+
+display(roi_summary)
+
+
+# 3c. By Channel
+type_roi = (
+    camp_data
+    .groupby("CampaignType")
+    .agg(
+        Campaigns=("CampaignKey","count"),
+        TotalRevenue=("RevenueGenerated","sum"),
+        TotalCost=("CampaignCost","sum"),
+        TotalBookings=("Bookings","sum")
+    )
+    .reset_index()
+)
+
+type_roi["NetROI%"]     = ((type_roi["TotalRevenue"] - type_roi["TotalCost"]) / type_roi["TotalCost"] * 100).round(2)
+type_roi["CostPerBook"] = (type_roi["TotalCost"] / type_roi["TotalBookings"]).round(2)
+type_roi = type_roi.sort_values("NetROI%", ascending=False)
+
+type_roi.index = range(1, len(type_roi) + 1)
+
+print("  3.3. ROI by Campaign Type")
+
+display(type_roi)
+
+# 3d. Best & worst campaigns
+channel_roi = (
+    camp_data
+    .groupby("ChannelName")
+    .agg(
+        TotalCost=("CampaignCost","sum"),
+        TotalRevenue=("RevenueGenerated","sum"),
+        TotalLeads=("Leads","sum"),
+        TotalTDs=("TestDrives","sum"),
+        TotalBookings=("Bookings","sum")
+    )
+    .reset_index()
+)
+
+channel_roi["NetROI%"]     = ((channel_roi["TotalRevenue"] - channel_roi["TotalCost"]) / channel_roi["TotalCost"] * 100).round(2)
+channel_roi["CostPerLead"] = (channel_roi["TotalCost"] / channel_roi["TotalLeads"]).round(2)
+channel_roi = channel_roi.sort_values("NetROI%", ascending=False)
+
+channel_roi.index = range(1, len(channel_roi) + 1)
+
+print("  3.4. ROI by Channel")
+
+display(channel_roi)
+
+
+# 3e TOP 5 CAMPAIGNS BY ROI
+top5 = camp_data.nlargest(5,"ROI_pct")[
+    ["CampaignName","CampaignType","ChannelName","ROI_pct","CampaignCost","RevenueGenerated"]
+].copy()
+
+top5.index = range(1, len(top5) + 1)
+
+print("  3.5. Top 5 Campaigns by ROI")
+
+display(top5)
+
+
+# 3f BOTTOM 5 CAMPAIGNS BY ROI
+
+bottom5 = camp_data.nsmallest(5,"ROI_pct")[
+    ["CampaignName","CampaignType","ChannelName","ROI_pct","CampaignCost","RevenueGenerated"]
+].copy()
+
+bottom5.index = range(1, len(bottom5) + 1)
+
+print("  3.6. Bottom 5 Campaigns by ROI")
+
+display(bottom5)
+
+# Charts
+# Chart 1: Conversion Funnel
+fig, ax = plt.subplots(figsize=(9, 5))
+
+stages = ["Impressions","Leads","Test Drives","Bookings"]
+values = [total_imp, total_lead, total_td, total_book]
+colors = ["#1F3864","#2E75B6","#70AD47","#FFC000"]
+
+bars = ax.barh(stages[::-1], values[::-1], color=colors[::-1])
+
+ax.set_xscale("log")
+
+for bar, val in zip(bars, values[::-1]):
+    ax.text(bar.get_width() * 1.05,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:,.0f}",
+            va="center", ha="left",
+            fontsize=10, fontweight="bold")
+
+ax.plot(values[::-1],
+        range(len(values)),
+        "o-",
+        color="#E63946",
+        linewidth=2,
+        markersize=6,
+        label="Trend")
+
+ax.set_title("Overall Conversion Funnel (Log Scale)", fontsize=14, fontweight="bold")
+ax.set_xlabel("Count (Log Scale)")
+ax.grid(axis="x", alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# Chart 2: ROI by Campaign Type
+fig, ax = plt.subplots(figsize=(10, 5))
+
+type_s = type_roi.sort_values("NetROI%")
+
+bars = ax.barh(type_s["CampaignType"],
+               type_s["NetROI%"],
+               color=["#70AD47" if x >= 0 else "#FF0000" for x in type_s["NetROI%"]])
+
+ax.axvline(0, color="black", linewidth=0.8)
+
+for bar, val in zip(bars, type_s["NetROI%"]):
+    x_pos = bar.get_width() + 0.5 if val >= 0 else bar.get_width() - 0.5
+    ha = "left" if val >= 0 else "right"
+    ax.text(x_pos,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.1f}%",
+            va="center", ha=ha,
+            fontsize=10, fontweight="bold")
+
+ax.plot(type_s["NetROI%"],
+        range(len(type_s)),
+        "o-",
+        color="#FFC000",
+        linewidth=2,
+        markersize=6,
+        label="Trend")
+
+ax.set_title("Net ROI % by Campaign Type", fontsize=14, fontweight="bold")
+ax.set_xlabel("ROI %")
+
+plt.tight_layout()
+plt.show()
+
+# Chart 3: ROI by Channel
+fig, ax = plt.subplots(figsize=(11, 7))
+
+ch_s = channel_roi.sort_values("NetROI%")
+
+bars = ax.barh(ch_s["ChannelName"],
+               ch_s["NetROI%"],
+               color=["#70AD47" if x >= 0 else "#FF0000" for x in ch_s["NetROI%"]])
+
+ax.axvline(0, color="black", linewidth=0.8)
+
+for bar, val in zip(bars, ch_s["NetROI%"]):
+    x_pos = bar.get_width() + 0.5 if val >= 0 else bar.get_width() - 0.5
+    ha = "left" if val >= 0 else "right"
+    ax.text(x_pos,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.1f}%",
+            va="center", ha=ha,
+            fontsize=9, fontweight="bold")
+
+ax.plot(ch_s["NetROI%"],
+        range(len(ch_s)),
+        "o-",
+        color="#FFC000",
+        linewidth=2,
+        markersize=5,
+        label="Trend")
+
+ax.set_title("Net ROI % by Channel", fontsize=14, fontweight="bold")
+ax.set_xlabel("ROI %")
+
+plt.tight_layout()
+plt.show()
+
+# Chart 4: Cost vs Revenue
+camp_type = (
+    camp_data
+    .groupby("CampaignType", as_index=False)
+    .agg(Cost=("CampaignCost","sum"), Revenue=("RevenueGenerated","sum"))
+)
+camp_type_sorted = camp_type.sort_values("Revenue", ascending=False)
+
+x = np.arange(len(camp_type_sorted))
+w = 0.38
+
+fig, ax = plt.subplots(figsize=(11, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars_cost = ax.bar(x - w/2, camp_type_sorted["Cost"], w,
+                    label="Cost", color="#4A6FA5", edgecolor="white", linewidth=0.5)
+bars_rev  = ax.bar(x + w/2, camp_type_sorted["Revenue"], w,
+                    label="Revenue", color="#7FB77E", edgecolor="white", linewidth=0.5)
+
+# Value labels — horizontal, small, clean
+for bar in bars_cost:
+    h = bar.get_height()
+    ax.text(bar.get_x() + bar.get_width()/2, h + h*0.01, f"${h/1e6:.0f}M",
+            ha="center", va="bottom", fontsize=8.5, color="#333")
+for bar in bars_rev:
+    h = bar.get_height()
+    ax.text(bar.get_x() + bar.get_width()/2, h + h*0.01, f"${h/1e6:.0f}M",
+            ha="center", va="bottom", fontsize=8.5, color="#333")
+
+ax.set_xticks(x)
+ax.set_xticklabels(camp_type_sorted["CampaignType"], fontsize=10)
+ax.set_title("Cost vs Revenue by Campaign Type", fontsize=14, fontweight="bold", pad=15)
+ax.set_ylabel("Amount ($)", fontsize=11)
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v/1e6:.0f}M"))
+
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.grid(axis="y", linestyle="--", alpha=0.25)
+ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=10)
+ax.margins(y=0.15)
+
+plt.tight_layout()
+plt.show()
+
+# Chart 5: Profit % by Campaign Type — distinct color per bar
+camp_type["Profit%"] = ((camp_type["Revenue"] - camp_type["Cost"]) / camp_type["Cost"] * 100).round(1)
+camp_type_profit_sorted = camp_type.sort_values("Profit%", ascending=True)
+
+fig, ax = plt.subplots(figsize=(10, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+palette = ["#4A6FA5", "#7FB77E", "#E8A33D", "#C6564C",
+           "#8E6FB5", "#5AA9A3", "#D98BB0", "#7A8B4F"]
+colors = [palette[i % len(palette)] for i in range(len(camp_type_profit_sorted))]
+
+bars = ax.barh(camp_type_profit_sorted["CampaignType"], camp_type_profit_sorted["Profit%"],
+                color=colors, edgecolor="white", linewidth=0.5, height=0.6)
+
+ax.axvline(0, color="#555", linewidth=1)
+
+for bar, val in zip(bars, camp_type_profit_sorted["Profit%"]):
+    x_pos = bar.get_width() + (1 if val >= 0 else -1)
+    ha = "left" if val >= 0 else "right"
+    ax.text(x_pos, bar.get_y() + bar.get_height()/2, f"{val:.1f}%",
+            va="center", ha=ha, fontsize=10, fontweight="bold", color="#333")
+
+ax.set_title("Profit % by Campaign Type", fontsize=14, fontweight="bold", pad=15)
+ax.set_xlabel("Profit % (Revenue vs Cost)", fontsize=11)
+
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.grid(axis="x", linestyle="--", alpha=0.25)
+ax.margins(x=0.15)
+
+plt.tight_layout()
+plt.show()
+
+print("Analysis 3 complete")
