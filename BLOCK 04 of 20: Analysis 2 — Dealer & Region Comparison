@@ -1,0 +1,241 @@
+# ============================================================
+# BLOCK 04 of 20: Analysis 2 — Dealer & Region Comparison
+# ============================================================
+
+# ----- Original Cell #6 -----
+# ANALYSIS 2: Dealer & Region Comparison
+from IPython.display import display
+sales_dealer = (
+    fvs
+    .merge(dim_dealer[["DealerKey","DealerName","DealerType","City","State"]],
+           on="DealerKey", how="left")
+    .merge(dim_region[["RegionKey","Zone"]],
+           on="RegionKey", how="left")
+    .merge(dim_exec[["SalesExecKey","SalesExecName","Experience"]],
+           on="SalesExecKey", how="left")
+)
+
+# 2a. By Dealer
+dealer_perf = (
+    sales_dealer
+    .groupby(["DealerKey","DealerName","City","State"])
+    .agg(
+        TotalRevenue=("SaleAmount","sum"),
+        UnitsSold=("UnitsSold","sum"),
+        AvgDiscount=("Discount","mean"),
+        UniqueExecs=("SalesExecKey","nunique")
+    )
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+
+dealer_perf["RevenuePerExec"] = (
+    dealer_perf["TotalRevenue"] / dealer_perf["UniqueExecs"]
+).round(0).astype(int)
+
+dealer_perf.index = range(1, len(dealer_perf) + 1)
+
+print("  2.1. Top 15 Dealers by Revenue")
+
+display(
+    dealer_perf.head(15)[
+        ["DealerName","City","State","TotalRevenue","UnitsSold","RevenuePerExec"]
+    ]
+    .style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}",
+        "RevenuePerExec": "${:,.0f}"
+    })
+)
+
+print("  2.2. Bottom 10 Dealers")
+
+display(
+    dealer_perf.tail(10)[
+        ["DealerName","City","State","TotalRevenue","UnitsSold"]
+    ]
+    .style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}"
+    })
+)
+
+# 2b. By Zone
+zone_perf = (
+    sales_dealer
+    .groupby("Zone")
+    .agg(
+        TotalRevenue=("SaleAmount","sum"),
+        UnitsSold=("UnitsSold","sum"),
+        Dealers=("DealerKey","nunique"),
+        AvgDiscount=("Discount","mean")
+    )
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+
+zone_perf["RevenuePerDealer"] = (
+    zone_perf["TotalRevenue"] / zone_perf["Dealers"]
+).round(0).astype(int)
+
+zone_perf.index = range(1, len(zone_perf) + 1)
+
+print("  2.3. Revenue by Zone")
+
+display(
+    zone_perf.style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}",
+        "RevenuePerDealer": "${:,.0f}",
+        "AvgDiscount": "${:,.0f}"
+    })
+)
+
+# 2c. By State
+state_perf = (
+    sales_dealer
+    .groupby(["State","Zone"])
+    .agg(
+        TotalRevenue=("SaleAmount","sum"),
+        UnitsSold=("UnitsSold","sum"),
+        Dealers=("DealerKey","nunique")
+    )
+    .reset_index()
+    .sort_values("TotalRevenue", ascending=False)
+)
+
+state_perf.index = range(1, len(state_perf) + 1)
+
+print("  2.4. Revenue by State")
+
+display(
+    state_perf.style.format({
+        "TotalRevenue": "${:,.0f}",
+        "UnitsSold": "{:,}"
+    })
+)
+
+# 2d. Exec Efficiency
+exec_eff = (
+    sales_dealer
+    .groupby(["DealerName","City"])
+    .agg(
+        UnitsSold=("UnitsSold","sum"),
+        ExecCount=("SalesExecKey","nunique")
+    )
+    .reset_index()
+)
+
+exec_eff["UnitsPerExec"] = (
+    exec_eff["UnitsSold"] / exec_eff["ExecCount"]
+).round(1)
+
+exec_eff = exec_eff.sort_values("UnitsPerExec", ascending=False)
+exec_eff.index = range(1, len(exec_eff) + 1)
+
+print("  2.5. Top 10 Most Efficient Dealers (Units per Sales Exec)")
+
+display(
+    exec_eff.head(10)[
+        ["DealerName","City","UnitsSold","ExecCount","UnitsPerExec"]
+    ]
+    .style.format({
+        "UnitsSold": "{:,}",
+        "ExecCount": "{:,}",
+        "UnitsPerExec": "{:.1f}"
+    })
+)
+
+# Charts
+
+# Chart 1: Total Revenue by Zone
+fig, ax = plt.subplots(figsize=(8, 5))
+
+zone_colors = {"West":"#2E75B6","Midwest":"#1F3864","South":"#70AD47"}
+
+bars = ax.bar(zone_perf["Zone"],
+              zone_perf["TotalRevenue"],
+              color=[zone_colors.get(z,"gray") for z in zone_perf["Zone"]])
+
+ax.plot(range(len(zone_perf)),
+        zone_perf["TotalRevenue"].values,
+        "o-",
+        color="#FFC000",
+        linewidth=2,
+        markersize=7,
+        label="Trend")
+
+for bar, val in zip(bars, zone_perf["TotalRevenue"]):
+    ax.text(bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + bar.get_height() * 0.01,
+            f"${val:,.0f}",
+            ha="center", va="bottom",
+            fontsize=10, fontweight="bold")
+
+ax.set_title("Total Revenue by Zone", fontsize=14, fontweight="bold")
+ax.set_ylabel("Revenue ($)")
+ax.margins(y=0.15)
+ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Chart 2: Revenue per Dealer by Zone
+fig, ax = plt.subplots(figsize=(8, 5))
+
+bars = ax.bar(zone_perf["Zone"],
+              zone_perf["RevenuePerDealer"],
+              color=[zone_colors.get(z,"gray") for z in zone_perf["Zone"]])
+
+ax.plot(range(len(zone_perf)),
+        zone_perf["RevenuePerDealer"].values,
+        "o-",
+        color="#FFC000",
+        linewidth=2,
+        markersize=7,
+        label="Trend")
+
+for bar, val in zip(bars, zone_perf["RevenuePerDealer"]):
+    ax.text(bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + bar.get_height() * 0.01,
+            f"${val:,.0f}",
+            ha="center", va="bottom",
+            fontsize=10, fontweight="bold")
+
+ax.set_title("Revenue per Dealer by Zone (Efficiency)", fontsize=14, fontweight="bold")
+ax.set_ylabel("Revenue per Dealer ($)")
+ax.margins(y=0.15)
+ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Chart 3: Units Sold by State
+fig, ax = plt.subplots(figsize=(9, 5))
+
+# Fix: sort ascending so bars and line both go small → large
+state_sorted = state_perf.sort_values("UnitsSold", ascending=True)
+labels = state_sorted["State"].values
+vals   = state_sorted["UnitsSold"].values
+
+bars = ax.barh(range(len(labels)), vals, color="#1F3864")
+ax.plot(vals, range(len(vals)), "o-",
+        color="#FFC000", linewidth=2, markersize=5, label="Trend")
+
+for bar, val in zip(bars, vals):
+    ax.text(bar.get_width() + bar.get_width()*0.01,
+            bar.get_y() + bar.get_height()/2,
+            f"{int(val):,}", va="center", ha="left",
+            fontsize=10, fontweight="bold")
+
+ax.set_yticks(range(len(labels)))
+ax.set_yticklabels(labels)
+ax.set_title("Units Sold by State", fontsize=14, fontweight="bold")
+ax.set_xlabel("Units Sold")
+ax.margins(x=0.18)
+ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+print("Analysis 2 complete")
