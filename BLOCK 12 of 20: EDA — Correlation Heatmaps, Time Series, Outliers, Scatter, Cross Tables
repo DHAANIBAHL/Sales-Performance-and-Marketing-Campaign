@@ -1,0 +1,563 @@
+# ============================================================
+# BLOCK 12 of 20: EDA — Correlation Heatmaps, Time Series, Outliers, Scatter, Cross Tables
+# ============================================================
+
+# ----- Original Cell #29 -----
+# 15.1 Correlation analysis heatmap
+print("EDA — CORRELATION HEATMAP")
+
+
+import seaborn as sns
+
+# Fact_VehicleSales Correlation
+print("\nFact_VehicleSales — Numeric Correlations:")
+fvs_numeric = fvs[["SaleAmount","Discount","UnitsSold"]].dropna()
+corr_fvs    = fvs_numeric.corr().round(3)
+display(corr_fvs)
+
+
+
+# Chart 1: FVS Correlation Heatmap
+fig, ax = plt.subplots(figsize=(7, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+sns.heatmap(corr_fvs, annot=True, fmt=".2f", cmap="Blues",
+            linewidths=0.5, linecolor="white",
+            annot_kws={"fontsize":12, "fontweight":"bold"},
+            ax=ax)
+
+ax.set_title("Fact_VehicleSales — Correlation Heatmap",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.tick_params(colors="black", labelsize=10)
+plt.tight_layout()
+plt.show()
+print()
+print()
+print()
+
+
+
+# ----- Original Cell #30 -----
+# 15.2 Correlation analysis heatmap
+print("EDA — CORRELATION HEATMAP")
+
+import seaborn as sns
+# Fact_MarketingCampaign Correlation
+print("\nFact_MarketingCampaign — Numeric Correlations:")
+fmc_numeric = fmc[["Impressions","Leads","TestDrives",
+                    "Bookings","CampaignCost","RevenueGenerated"]].dropna()
+corr_fmc    = fmc_numeric.corr().round(3)
+display(corr_fmc)
+
+# Chart 2: FMC Correlation Heatmap
+fig, ax = plt.subplots(figsize=(10, 7))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+sns.heatmap(corr_fmc, annot=True, fmt=".2f", cmap="Blues",
+            linewidths=0.5, linecolor="white",
+            annot_kws={"fontsize":11, "fontweight":"bold"},
+            ax=ax)
+
+ax.set_title("Fact_MarketingCampaign — Correlation Heatmap",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.tick_params(colors="black", labelsize=10)
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #31 -----
+# 17. Time Series Analysis
+print("EDA — TIME SERIES ANALYSIS")
+
+dim_date["Date"]    = pd.to_datetime(dim_date["Date"])
+dim_date["Month"]   = dim_date["Date"].dt.month
+dim_date["Quarter"] = "Q" + dim_date["Quarter"].astype(str)
+
+# Merge fvs with dim_date
+fvs_date = fvs.merge(dim_date[["DateKey","Date","Month","MonthName",
+                                 "Quarter","Year","IsWeekend"]],
+                      on="DateKey", how="left")
+fvs_date["Date"] = pd.to_datetime(fvs_date["Date"])
+
+# Monthly Revenue
+monthly = (fvs_date.groupby(["Year","Month","MonthName"])
+           .agg(TotalRevenue=("SaleAmount","sum"),
+                UnitsSold=("UnitsSold","sum"),
+                Transactions=("SalesKey","count"))
+           .reset_index()
+           .sort_values(["Year","Month"]))
+monthly["YearMonth"] = monthly["MonthName"].str[:3] + " " + monthly["Year"].astype(str)
+
+print("\nMonthly Revenue Summary:")
+display(monthly[["YearMonth","TotalRevenue","UnitsSold","Transactions"]]
+        .style.format({"TotalRevenue":"${:,.0f}",
+                       "UnitsSold":"{:,}",
+                       "Transactions":"{:,}"}))
+
+# Quarterly Revenue
+quarterly = (fvs_date.groupby(["Year","Quarter"])
+             .agg(TotalRevenue=("SaleAmount","sum"),
+                  UnitsSold=("UnitsSold","sum"))
+             .reset_index()
+             .sort_values(["Year","Quarter"]))
+quarterly["YearQuarter"] = quarterly["Quarter"] + " " + quarterly["Year"].astype(str)
+
+print("\nQuarterly Revenue Summary:")
+display(quarterly[["YearQuarter","TotalRevenue","UnitsSold"]]
+        .style.format({"TotalRevenue":"${:,.0f}","UnitsSold":"{:,}"}))
+
+# Weekend vs Weekday
+weekend = (fvs_date.groupby("IsWeekend")
+           .agg(TotalRevenue=("SaleAmount","sum"),
+                AvgRevenue=("SaleAmount","mean"),
+                Transactions=("SalesKey","count"))
+           .reset_index())
+weekend["IsWeekend"] = weekend["IsWeekend"].map({True:"Weekend", False:"Weekday"})
+
+print("\nWeekend vs Weekday:")
+display(weekend.style.format({"TotalRevenue":"${:,.0f}",
+                               "AvgRevenue":"${:,.0f}",
+                               "Transactions":"{:,}"}))
+
+# Chart 1: Monthly Revenue Trend
+fig, ax = plt.subplots(figsize=(16, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+vals   = monthly["TotalRevenue"].values
+labels = monthly["YearMonth"].values
+
+bars = ax.bar(range(len(labels)), vals, color="#2E4A6E", width=0.6, zorder=2)
+for bar, val in zip(bars, vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + max(vals)*0.01,
+            f"${val/1_000_000:.1f}M", ha="center", va="bottom",
+            fontsize=7, fontweight="bold", color="black", rotation=90)
+
+ax.plot(range(len(vals)), vals, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=5, zorder=3, label="Trend")
+
+ax.set_title("Monthly Revenue Trend (2022–2023)",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8, color="black")
+ax.set_ylabel("Total Revenue ($)", fontsize=11, fontweight="bold", color="black")
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1_000_000:.0f}M"))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.tick_params(axis="y", colors="black")
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=1)
+ax.legend(facecolor="white", edgecolor="black")
+ax.margins(y=0.3)
+plt.tight_layout()
+plt.show()
+
+# Chart 2: Quarterly Revenue
+fig, ax = plt.subplots(figsize=(12, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+q_vals   = quarterly["TotalRevenue"].values
+q_labels = quarterly["YearQuarter"].values
+colors   = ["#2E4A6E" if "2022" in l else "#3A7CA5" for l in q_labels]
+
+bars = ax.bar(range(len(q_labels)), q_vals, color=colors, width=0.6, zorder=2)
+for bar, val in zip(bars, q_vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + max(q_vals)*0.01,
+            f"${val/1_000_000:.1f}M", ha="center", va="bottom",
+            fontsize=9, fontweight="bold", color="black")
+
+ax.plot(range(len(q_vals)), q_vals, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=7, zorder=3, label="Trend")
+
+ax.set_title("Quarterly Revenue Trend (2022–2023)",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xticks(range(len(q_labels)))
+ax.set_xticklabels(q_labels, rotation=20, fontsize=9, color="black")
+ax.set_ylabel("Total Revenue ($)", fontsize=11, fontweight="bold", color="black")
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1_000_000:.0f}M"))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.tick_params(axis="y", colors="black")
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=1)
+
+from matplotlib.patches import Patch
+legend_elements = [
+    Patch(facecolor="#2E4A6E", label="2022"),
+    Patch(facecolor="#3A7CA5", label="2023"),
+    plt.Line2D([0],[0], color="#F4C542", marker="o", linewidth=2, label="Trend")
+]
+ax.legend(handles=legend_elements, facecolor="white", edgecolor="black")
+ax.margins(y=0.2)
+plt.tight_layout()
+plt.show()
+
+# Chart 3: Weekend vs Weekday
+fig, ax = plt.subplots(figsize=(8, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+w_labels = weekend["IsWeekend"].values
+w_vals   = weekend["TotalRevenue"].values
+colors   = ["#2E4A6E","#3A7CA5"][:len(w_labels)]
+
+bars = ax.bar(range(len(w_labels)), w_vals, color=colors, width=0.4, zorder=2)
+for bar, val in zip(bars, w_vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + max(w_vals)*0.01,
+            f"${val/1_000_000:.1f}M", ha="center", va="bottom",
+            fontsize=11, fontweight="bold", color="black")
+
+ax.plot(range(len(w_vals)), w_vals, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=8, zorder=3, label="Trend")
+
+ax.set_title("Revenue — Weekend vs Weekday",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xticks(range(len(w_labels)))
+ax.set_xticklabels(w_labels, fontsize=11, color="black")
+ax.set_ylabel("Total Revenue", fontsize=11, fontweight="bold", color="black")
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1_000_000:.0f}M"))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.tick_params(axis="y", colors="black")
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=1)
+ax.legend(facecolor="white", edgecolor="black")
+ax.margins(y=0.2)
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #32 -----
+# 18.Boxplots — Visual Outlier Detection
+print("EDA — OUTLIER DETECTION (BOXPLOTS)")
+
+def outlier_stats(series, name):
+    q1   = series.quantile(0.25)
+    q3   = series.quantile(0.75)
+    iqr  = q3 - q1
+    low  = q1 - 1.5*iqr
+    high = q3 + 1.5*iqr
+    out  = series[(series < low) | (series > high)]
+    return q1, q3, iqr, low, high, out
+
+sa_q1, sa_q3, sa_iqr, sa_low, sa_high, sa_out = outlier_stats(fvs["SaleAmount"].dropna(), "SaleAmount")
+di_q1, di_q3, di_iqr, di_low, di_high, di_out = outlier_stats(fvs["Discount"].dropna(), "Discount")
+pr_q1, pr_q3, pr_iqr, pr_low, pr_high, pr_out = outlier_stats(dim_vehicle["Price"].dropna(), "Vehicle Price")
+
+# Outlier Summary Table
+print("\nOutlier Summary:")
+outlier_summary = pd.DataFrame({
+    "Column":        ["SaleAmount", "Discount", "Vehicle Price"],
+    "Q1":            [f"${sa_q1:,.2f}",  f"${di_q1:,.2f}",  f"${pr_q1:,.2f}"],
+    "Q3":            [f"${sa_q3:,.2f}",  f"${di_q3:,.2f}",  f"${pr_q3:,.2f}"],
+    "IQR":           [f"${sa_iqr:,.2f}", f"${di_iqr:,.2f}", f"${pr_iqr:,.2f}"],
+    "Lower Fence":   [f"${sa_low:,.2f}", f"${di_low:,.2f}", f"${pr_low:,.2f}"],
+    "Upper Fence":   [f"${sa_high:,.2f}",f"${di_high:,.2f}",f"${pr_high:,.2f}"],
+    "Outlier Count": [f"{len(sa_out):,}", f"{len(di_out):,}", f"{len(pr_out):,}"],
+    "Outlier %":     [f"{len(sa_out)/len(fvs['SaleAmount'].dropna())*100:.1f}%",
+                      f"{len(di_out)/len(fvs['Discount'].dropna())*100:.1f}%",
+                      f"{len(pr_out)/len(dim_vehicle['Price'].dropna())*100:.1f}%"]
+})
+outlier_summary.index = range(1, len(outlier_summary)+1)
+display(outlier_summary)
+
+# SaleAmount Detail Table
+print("\nSaleAmount — Outlier Detail:")
+sa = fvs["SaleAmount"].dropna()
+sa_detail = pd.DataFrame({
+    "Metric": ["Total Rows","Normal Rows","Outlier Rows","Outlier %",
+               "Min Outlier (Low)","Max Outlier (High)",
+               "Lower Fence","Upper Fence","Median","Mean"],
+    "Value":  [f"{len(sa):,}",
+               f"{len(sa[(sa>=sa_low)&(sa<=sa_high)]):,}",
+               f"{len(sa_out):,}",
+               f"{len(sa_out)/len(sa)*100:.1f}%",
+               f"${sa[sa<sa_low].min():,.2f}" if len(sa[sa<sa_low])>0 else "None",
+               f"${sa[sa>sa_high].max():,.2f}" if len(sa[sa>sa_high])>0 else "None",
+               f"${sa_low:,.2f}",
+               f"${sa_high:,.2f}",
+               f"${sa.median():,.2f}",
+               f"${sa.mean():,.2f}"]
+})
+sa_detail.index = range(1, len(sa_detail)+1)
+display(sa_detail)
+
+# Discount Detail Table
+print("\nDiscount — Outlier Detail:")
+di = fvs["Discount"].dropna()
+di_detail = pd.DataFrame({
+    "Metric": ["Total Rows","Normal Rows","Outlier Rows","Outlier %",
+               "Min Outlier (Low)","Max Outlier (High)",
+               "Lower Fence","Upper Fence","Median","Mean"],
+    "Value":  [f"{len(di):,}",
+               f"{len(di[(di>=di_low)&(di<=di_high)]):,}",
+               f"{len(di_out):,}",
+               f"{len(di_out)/len(di)*100:.1f}%",
+               f"${di[di<di_low].min():,.2f}" if len(di[di<di_low])>0 else "None",
+               f"${di[di>di_high].max():,.2f}" if len(di[di>di_high])>0 else "None",
+               f"${di_low:,.2f}",
+               f"${di_high:,.2f}",
+               f"${di.median():,.2f}",
+               f"${di.mean():,.2f}"]
+})
+di_detail.index = range(1, len(di_detail)+1)
+display(di_detail)
+
+# Vehicle Price Detail Table
+print("\nVehicle Price — Outlier Detail:")
+pr = dim_vehicle["Price"].dropna()
+pr_detail = pd.DataFrame({
+    "Metric": ["Total Rows","Normal Rows","Outlier Rows","Outlier %",
+               "Min Outlier (Low)","Max Outlier (High)",
+               "Lower Fence","Upper Fence","Median","Mean"],
+    "Value":  [f"{len(pr):,}",
+               f"{len(pr[(pr>=pr_low)&(pr<=pr_high)]):,}",
+               f"{len(pr_out):,}",
+               f"{len(pr_out)/len(pr)*100:.1f}%",
+               f"${pr[pr<pr_low].min():,.2f}" if len(pr[pr<pr_low])>0 else "None",
+               f"${pr[pr>pr_high].max():,.2f}" if len(pr[pr>pr_high])>0 else "None",
+               f"${pr_low:,.2f}",
+               f"${pr_high:,.2f}",
+               f"${pr.median():,.2f}",
+               f"${pr.mean():,.2f}"]
+})
+pr_detail.index = range(1, len(pr_detail)+1)
+display(pr_detail)
+
+# SALEAMOUNT CHARTS
+
+sa_normal   = sa[(sa >= sa_low) & (sa <= sa_high)]
+sa_outliers = sa[(sa < sa_low)  | (sa > sa_high)]
+
+# Histogram
+fig, ax = plt.subplots(figsize=(14, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+n_counts, bins, patches = ax.hist(sa, bins=60, color="#2E4A6E",
+                                   edgecolor="white", zorder=2)
+for patch, left_edge in zip(patches, bins[:-1]):
+    if left_edge < sa_low or left_edge >= sa_high:
+        patch.set_facecolor("#E63946")
+        patch.set_alpha(0.8)
+ax.set_title("SaleAmount — Histogram (Red = Outlier Zones)",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xlabel("Sale Amount ($)", fontsize=11, fontweight="bold", color="black")
+ax.set_ylabel("Frequency", fontsize=11, fontweight="bold", color="black")
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}K"))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.tick_params(colors="black")
+ax.grid(axis='y', linestyle='--', alpha=0.3)
+ax.legend(facecolor="white", edgecolor="black", fontsize=9, ncol=2)
+ax.margins(y=0.2)
+plt.tight_layout()
+plt.show()
+
+# DISCOUNT CHARTS
+
+di_normal   = di[(di >= di_low) & (di <= di_high)]
+di_outliers = di[(di < di_low)  | (di > di_high)]
+
+# Histogram
+fig, ax = plt.subplots(figsize=(14, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+n_counts, bins, patches = ax.hist(di, bins=60, color="#2E4A6E",
+                                   edgecolor="white", zorder=2)
+for patch, left_edge in zip(patches, bins[:-1]):
+    if left_edge < di_low or left_edge >= di_high:
+        patch.set_facecolor("#E63946")
+        patch.set_alpha(0.8)
+ax.set_title("Discount — Histogram (Red = Outlier Zones)",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xlabel("Discount ($)", fontsize=11, fontweight="bold", color="black")
+ax.set_ylabel("Frequency", fontsize=11, fontweight="bold", color="black")
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.tick_params(colors="black")
+ax.grid(axis='y', linestyle='--', alpha=0.3)
+ax.legend(facecolor="white", edgecolor="black", fontsize=9, ncol=2)
+ax.margins(y=0.2)
+plt.tight_layout()
+plt.show()
+
+# VEHICLE PRICE CHARTS
+
+pr_normal   = pr[(pr >= pr_low) & (pr <= pr_high)]
+pr_outliers = pr[(pr < pr_low)  | (pr > pr_high)]
+
+# Strip Plot
+fig, ax = plt.subplots(figsize=(14, 4))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+ax.scatter(pr_normal,
+           np.random.uniform(0.6, 1.4, size=len(pr_normal)),
+           alpha=0.5, color="#2E4A6E", s=30, zorder=2,
+           label=f"Normal ({len(pr_normal):,})")
+ax.scatter(pr_outliers,
+           np.random.uniform(0.6, 1.4, size=len(pr_outliers)),
+           alpha=0.9, color="#E63946", s=60, zorder=3,
+           label=f"Outliers ({len(pr_outliers):,})")
+
+ax.set_title("Vehicle Price — Strip Plot",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xlabel("Price ($)", fontsize=11, fontweight="bold", color="black")
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}K"))
+ax.set_yticks([])
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_visible(False)
+ax.spines["bottom"].set_color("black")
+ax.tick_params(axis="x", colors="black", labelsize=9)
+ax.legend(facecolor="white", edgecolor="black", fontsize=9,
+          loc="upper right", ncol=3)
+plt.tight_layout()
+plt.show()
+
+# Histogram
+fig, ax = plt.subplots(figsize=(14, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+n_counts, bins, patches = ax.hist(pr, bins=40, color="#2E4A6E",
+                                   edgecolor="white", zorder=2)
+for patch, left_edge in zip(patches, bins[:-1]):
+    if left_edge < pr_low or left_edge >= pr_high:
+        patch.set_facecolor("#E63946")
+        patch.set_alpha(0.8)
+
+ax.set_title("Vehicle Price — Histogram",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xlabel("Price ($)", fontsize=11, fontweight="bold", color="black")
+ax.set_ylabel("Frequency", fontsize=11, fontweight="bold", color="black")
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}K"))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.tick_params(colors="black")
+ax.grid(axis='y', linestyle='--', alpha=0.3)
+ax.legend(facecolor="white", edgecolor="black", fontsize=9, ncol=2)
+ax.margins(y=0.2)
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #33 -----
+# 19.Scatter Plots — Relationship Analysis
+print("EDA — RELATIONSHIP ANALYSIS (SCATTER PLOTS)")
+
+# Chart 1: CampaignCost vs RevenueGenerated
+fig, ax = plt.subplots(figsize=(10, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+fmc_pos = fmc_clean[fmc_clean["CampaignCost"] > 0]
+colors  = ["#70AD47" if r > c else "#E63946"
+           for r, c in zip(fmc_pos["RevenueGenerated"], fmc_pos["CampaignCost"])]
+
+ax.scatter(fmc_pos["CampaignCost"], fmc_pos["RevenueGenerated"],
+           alpha=0.7, color=colors, s=60, zorder=2)
+
+# Break-even line
+max_val = max(fmc_pos["CampaignCost"].max(), fmc_pos["RevenueGenerated"].max())
+ax.plot([0, max_val], [0, max_val], color="#1E2A3A", linewidth=1.5,
+        linestyle="--", label="Break-even line", zorder=3)
+
+corr3 = fmc_pos["CampaignCost"].corr(fmc_pos["RevenueGenerated"])
+ax.set_title(f"Campaign Cost vs Revenue Generated (Correlation: {corr3:.3f})",
+             fontsize=14, fontweight="bold", color="black", pad=15)
+ax.set_xlabel("Campaign Cost ($)", fontsize=11, fontweight="bold", color="black")
+ax.set_ylabel("Revenue Generated ($)", fontsize=11, fontweight="bold", color="black")
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}K"))
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1000:.0f}K"))
+ax.tick_params(colors="black")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.grid(linestyle='--', alpha=0.3)
+
+from matplotlib.patches import Patch
+legend_elements = [
+    Patch(facecolor="#70AD47", label="Revenue > Cost (Profitable)"),
+    Patch(facecolor="#E63946", label="Revenue < Cost (Loss)"),
+    plt.Line2D([0],[0], color="#1E2A3A", linestyle="--",
+               linewidth=1.5, label="Break-even line")
+]
+ax.legend(handles=legend_elements, facecolor="white", edgecolor="black")
+plt.tight_layout()
+plt.show()
+print(f"\n  CampaignCost vs RevenueGenerated correlation: {corr3:.3f}")
+
+# ----- Original Cell #34 -----
+# 20.Cross Table Analysis
+print("EDA — CROSS TABLE ANALYSIS")
+
+# Sales by Channel AND Region
+fvs_full = (fvs
+    .merge(dim_channel[["ChannelKey","ChannelName","Medium"]], on="ChannelKey", how="left")
+    .merge(dim_region[["RegionKey","Zone","State"]], on="RegionKey", how="left"))
+
+print("\nRevenue by Channel Medium × Zone (Crosstab):")
+crosstab1 = pd.crosstab(
+    fvs_full["Medium"], fvs_full["Zone"],
+    values=fvs_full["SaleAmount"], aggfunc="sum"
+).round(0).fillna(0)
+display(crosstab1.style.format("${:,.0f}"))
+
+# Customer Type vs Income Group
+print("\nCustomer Count by CustomerType × IncomeGroup:")
+crosstab2 = pd.crosstab(dim_customer["CustomerType"],
+                         dim_customer["IncomeGroup"])
+display(crosstab2)
+
+# FuelType vs BodyType
+print("\nVehicle Count by FuelType × BodyType:")
+crosstab3 = pd.crosstab(dim_vehicle["FuelType"],
+                         dim_vehicle["BodyType"])
+display(crosstab3)
+
+# Rare Categories
+print("\nRare Categories (appearing < 1% of rows):")
+cat_cols = {
+    "AgeGroup":      dim_customer["AgeGroup"],
+    "IncomeGroup":   dim_customer["IncomeGroup"],
+    "CustomerType":  dim_customer["CustomerType"],
+    "Gender":        dim_customer["Gender"],
+    "FuelType":      dim_vehicle["FuelType"],
+    "BodyType":      dim_vehicle["BodyType"],
+    "Transmission":  dim_vehicle["Transmission"],
+    "CampaignType":  dim_campaign["CampaignType"],
+    "ChannelType":   dim_channel["ChannelType"],
+    "Medium":        dim_channel["Medium"],
+}
+
+rare_list = []
+for col_name, series in cat_cols.items():
+    counts = series.value_counts(normalize=True) * 100
+    rare   = counts[counts < 1]
+    for val, pct in rare.items():
+        rare_list.append({
+            "Column":    col_name,
+            "Value":     val,
+            "Count":     series.value_counts()[val],
+            "% of Rows": round(pct, 2)
+        })
+
+if rare_list:
+    rare_df = pd.DataFrame(rare_list)
+    rare_df.index = range(1, len(rare_df)+1)
+    display(rare_df)
+else:
+    print("  No rare categories found (all categories > 1%)")
