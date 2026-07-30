@@ -1,0 +1,439 @@
+# ============================================================
+# BLOCK 15 of 20: Feature Engineering, Encoding, CLV Proxy, Seasonality, Save to Drive
+# ============================================================
+
+# ----- Original Cell #59 -----
+all_sheets2 = pd.read_excel(DRIVE_FILE, sheet_name=None)
+fmc         = all_sheets2["Fact_MarketingCampaignPerforman"].copy()
+print(f"fmc reloaded — {len(fmc)} rows")
+print(f"   Total RevenueGenerated: ${fmc['RevenueGenerated'].sum():,.0f}")
+
+mktg = (
+    fmc
+    .merge(dim_campaign, on="CampaignKey", how="left")
+    .merge(dim_channel,  on="ChannelKey",  how="left", suffixes=("","_chan"))
+    .merge(dim_date,     on="DateKey",     how="left", suffixes=("","_date"))
+)
+print(f"mktg rebuilt — {mktg.shape}")
+
+camp_pl = (
+    mktg.groupby("CampaignName", as_index=False)
+    .agg(
+        Budget      = ("Budget",           "mean"),
+        Cost        = ("CampaignCost",     "sum"),
+        Revenue     = ("RevenueGenerated", "sum"),
+        Impressions = ("Impressions",      "sum"),
+        Leads       = ("Leads",            "sum"),
+        Bookings    = ("Bookings",         "sum"),
+    )
+)
+camp_pl["Profit_Loss"]  = camp_pl["Revenue"] - camp_pl["Cost"]
+camp_pl["ROI_%"]        = ((camp_pl["Revenue"] - camp_pl["Cost"]) / camp_pl["Cost"] * 100).round(1)
+camp_pl["Cost_vs_Budg"] = ((camp_pl["Cost"] / camp_pl["Budget"]) * 100).round(1)
+camp_pl["Status"]       = camp_pl["Profit_Loss"].apply(lambda x: "✅ Profit" if x >= 0 else "❌ Loss")
+
+total_profit = camp_pl[camp_pl["Profit_Loss"] >= 0]["Profit_Loss"].sum()
+total_loss   = camp_pl[camp_pl["Profit_Loss"] <  0]["Profit_Loss"].sum()
+net          = total_profit + total_loss
+
+print(f"camp_pl built — {len(camp_pl)} campaigns")
+print(f"   Profitable : {(camp_pl['Profit_Loss'] >= 0).sum()}")
+print(f"   Loss       : {(camp_pl['Profit_Loss'] <  0).sum()}")
+print(f"   Total Profit : ${total_profit:,.0f}")
+print(f"   Total Loss   : ${abs(total_loss):,.0f}")
+print(f"   Net          : ${net:,.0f}  {'yes' if net >= 0 else 'no'}")
+
+pretty(camp_pl[["CampaignName","Budget","Cost","Revenue",
+                "Profit_Loss","ROI_%","Status"]],
+       "Campaign Profit / Loss Summary", "PL",
+       format_cols={"Budget":"currency","Cost":"currency",
+                    "Revenue":"currency","Profit_Loss":"currency",
+                    "ROI_%":"pct"})
+camp_pl_sorted = camp_pl.sort_values("Profit_Loss", ascending=True)
+
+import matplotlib.ticker as mticker
+
+# Campaign Profit/Loss Summary Stats
+total_profit = camp_pl[camp_pl["Profit_Loss"] >= 0]["Profit_Loss"].sum()
+total_loss   = camp_pl[camp_pl["Profit_Loss"] <  0]["Profit_Loss"].sum()
+net          = total_profit + total_loss
+
+import matplotlib.ticker as mticker
+
+# Campaign Profit/Loss Summary Stats (already computed above — no need to recompute)
+
+# Chart 1: Top 15 Most Profitable Campaigns
+top15 = camp_pl.nlargest(15, "Profit_Loss").sort_values("Profit_Loss")
+
+fig, ax = plt.subplots(figsize=(9, 7))
+bars = ax.barh(top15["CampaignName"], top15["Profit_Loss"]/1e3, color="#2E7D32")
+
+for bar, val in zip(bars, top15["Profit_Loss"]/1e3):
+    ax.text(bar.get_width()+5, bar.get_y()+bar.get_height()/2, f"${val:,.1f}K",
+            va="center", fontsize=9, fontweight="bold", color="#2E7D32")
+
+ax.set_title("Top 15 Most Profitable Campaigns", fontweight="bold", fontsize=13)
+ax.set_xlabel("Profit ($K)")
+plt.tight_layout()
+plt.savefig("/content/top15_profit.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+
+# Chart 2: Bottom 15 Campaigns by Profit/Loss (biggest losses)
+bottom15 = camp_pl.nsmallest(15, "Profit_Loss").sort_values("Profit_Loss", ascending=False)
+
+fig, ax = plt.subplots(figsize=(9, 7))
+bars = ax.barh(bottom15["CampaignName"], bottom15["Profit_Loss"]/1e3, color="#B71C1C")
+
+for bar, val in zip(bars, bottom15["Profit_Loss"]/1e3):
+    ax.text(bar.get_width()-5, bar.get_y()+bar.get_height()/2, f"${val:,.1f}K",
+            va="center", ha="right", fontsize=9, fontweight="bold", color="white")  # fixed: was "000000"
+
+ax.axvline(0, color="black", linewidth=0.8)
+ax.set_title("Bottom 15 Campaigns by Profit/Loss", fontweight="bold", fontsize=13)
+ax.set_xlabel("Profit / Loss ($K)")
+plt.tight_layout()
+plt.savefig("/content/bottom15_loss.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+
+# Summary Printout
+print(f"Total Profit : ${total_profit:,.0f}")
+print(f"Total Loss   : ${abs(total_loss):,.0f}")
+print(f"Net          : ${net:,.0f}")
+
+# ----- Original Cell #60 -----
+# 1. Fix Dim_Date: Parse Date & Add MonthNum
+dim_date['Date']     = pd.to_datetime(dim_date['Date'])
+dim_date['MonthNum'] = dim_date['Date'].dt.month
+
+print(f"Dim_Date fixed")
+print(f"   Date dtype : {dim_date['Date'].dtype}")
+print(f"\nMonthNum mapping:")
+print(dim_date[['MonthName','MonthNum']].drop_duplicates()
+      .sort_values('MonthNum').to_string(index=False))
+
+# ----- Original Cell #61 -----
+# 2. Fix remaining issues
+# Fix Corrupted Vehicle Prices
+price_fixes = {
+    2806: 55000,   # Toyota Land Cruiser
+    2304: 18000,   # Pontiac Grand Prix
+    706:  22000,   # Chrysler Sebring Coupe
+    2905: 22000,   # Volkswagen Jetta
+}
+for vk, price in price_fixes.items():
+    dim_vehicle.loc[dim_vehicle['VehicleKey'] == vk, 'Price'] = price
+
+for vk in dim_vehicle[(dim_vehicle['Brand']=='Volvo') & (dim_vehicle['Model']=='S80')]['VehicleKey'].values:
+    dim_vehicle.loc[dim_vehicle['VehicleKey']==vk, 'Price'] = 35000
+
+for vk in dim_vehicle[(dim_vehicle['Brand']=='Ford') & (dim_vehicle['Model']=='Ranger')]['VehicleKey'].values:
+    dim_vehicle.loc[dim_vehicle['VehicleKey']==vk, 'Price'] = 28000
+
+print(f"Vehicle prices fixed")
+print(f"   Prices still < $5,000: {(dim_vehicle['Price'] < 5000).sum()} (should be 0)")
+
+# Fix Null Impressions in Fact_Marketing
+print(f"Null Impressions before: {fmc['Impressions'].isnull().sum()}")
+
+fmc['Impressions'] = fmc['Impressions'].fillna(
+    fmc.groupby('CampaignKey')['Impressions'].transform('median'))
+fmc['Impressions'] = fmc['Impressions'].fillna(fmc['Impressions'].median())
+fmc['Impressions'] = fmc['Impressions'].round(0).astype(int)
+
+print(f"Null Impressions after : {fmc['Impressions'].isnull().sum()} ")
+
+
+# ----- Original Cell #62 -----
+#  3. Build Master Joined Table
+
+master = (
+    fvs
+    .merge(dim_date[['DateKey','Date','MonthName','MonthNum','Quarter','Year','IsWeekend']],
+           on='DateKey', how='left')
+    .merge(dim_vehicle[['VehicleKey','Brand','Model','BodyType','FuelType','Transmission','Price']],
+           on='VehicleKey', how='left')
+    .merge(dim_customer[['CustomerKey','CustomerName','Gender','AgeGroup','IncomeGroup','CustomerType','City','State']],
+           on='CustomerKey', how='left')
+    .merge(dim_dealer[['DealerKey','DealerName','DealerType']],
+           on='DealerKey', how='left')
+    .merge(dim_region[['RegionKey','Zone','Country']],
+           on='RegionKey', how='left')
+    .merge(dim_channel[['ChannelKey','ChannelName','ChannelType','Medium']],
+           on='ChannelKey', how='left')
+    .merge(dim_campaign[['CampaignKey','CampaignName','CampaignType','Budget']],
+           on='CampaignKey', how='left')
+    .merge(dim_exec[['SalesExecKey','SalesExecName','Experience']],
+           on='SalesExecKey', how='left')
+)
+
+print(f"Master built — {master.shape}")
+print(f"   Null check  : {master.isnull().sum().sum()} total nulls")
+
+# ----- Original Cell #63 -----
+# 4. Date Feature Engineering
+master['DayOfWeek']    = master['Date'].dt.dayofweek
+master['DayName']      = master['Date'].dt.day_name()
+master['WeekOfYear']   = master['Date'].dt.isocalendar().week.astype(int)
+master['IsMonthStart'] = master['Date'].dt.is_month_start.astype(int)
+master['IsMonthEnd']   = master['Date'].dt.is_month_end.astype(int)
+
+# Fix IsWeekend — stored as 'Yes'/'No' strings in Dim_Date
+master['IsWeekend'] = master['IsWeekend'].map(
+    {'Yes':1, 'No':0, True:1, False:0}).fillna(0).astype(int)
+
+# Cyclical encoding — keeps Dec and Jan numerically close
+master['MonthSin'] = np.sin(2 * np.pi * master['MonthNum'] / 12)
+master['MonthCos'] = np.cos(2 * np.pi * master['MonthNum'] / 12)
+
+# Linear time trend: Jan 2022 = 1, Dec 2023 = 24
+master['TimeIndex'] = (master['Year'] - 2022) * 12 + master['MonthNum']
+
+print(f"Date features added")
+print(f"   TimeIndex range : {master['TimeIndex'].min()} – {master['TimeIndex'].max()}")
+print(f"   IsWeekend values: {master['IsWeekend'].value_counts().to_dict()}")
+
+# ----- Original Cell #64 -----
+# 5. Revenue Feature Engineering
+master['NetRevenue']       = master['SaleAmount'] - master['Discount']
+master['DiscountPct']      = (master['Discount'] / master['SaleAmount'] * 100).round(2)
+master['RevPerUnit']       = (master['SaleAmount'] / master['UnitsSold']).round(2)
+master['PriceToSaleRatio'] = (master['SaleAmount'] / master['Price']).round(3)
+
+print(f"Revenue features added")
+print(f"\n   NetRevenue stats:")
+print(master['NetRevenue'].describe().round(0))
+print(f"\n   DiscountPct  : {master['DiscountPct'].min():.1f}% – {master['DiscountPct'].max():.1f}%")
+print(f"   RevPerUnit   : ${master['RevPerUnit'].min():,.0f} – ${master['RevPerUnit'].max():,.0f}")
+
+# ----- Original Cell #65 -----
+# 6. Categorical Encoding: Convert all text categories to numbers for ML models.
+# Ordinal encoding — natural order exists
+age_map    = {'Under 25':1, '25-34':2, '35-44':3, '45-54':4, '55-64':5, '65+':6}
+income_map = {'Low':1, 'Upper-Middle':2, 'High':3}
+
+master['AgeGroupCode']    = master['AgeGroup'].map(age_map)
+master['IncomeGroupCode'] = master['IncomeGroup'].map(income_map)
+
+# Experience bands — group into 4 career levels
+master['ExperienceBand'] = pd.cut(
+    master['Experience'],
+    bins=[0, 5, 10, 15, 20],
+    labels=['Junior (1-5)','Mid (6-10)','Senior (11-15)','Expert (16-20)'],
+    include_lowest=True
+)
+
+# Binary flags
+master['IsAutoTransmission'] = (master['Transmission'] == 'Auto').astype(int)
+master['IsLoyalCustomer']    = (master['CustomerType'] == 'Loyal').astype(int)
+master['IsNewCustomer']      = (master['CustomerType'] == 'New').astype(int)
+
+# One-hot encoding — no natural order
+fuel_dummies = pd.get_dummies(master['FuelType'],     prefix='Fuel',     dtype=int)
+body_dummies = pd.get_dummies(master['BodyType'],     prefix='Body',     dtype=int)
+zone_dummies = pd.get_dummies(master['Zone'],         prefix='Zone',     dtype=int)
+chan_dummies  = pd.get_dummies(master['ChannelType'], prefix='ChanType', dtype=int)
+
+master = pd.concat([master, fuel_dummies, body_dummies,
+                    zone_dummies, chan_dummies], axis=1)
+
+print(f"Categorical encoding done")
+print(f"   One-hot columns added: {list(fuel_dummies.columns) + list(body_dummies.columns) + list(zone_dummies.columns)}")
+print(f"   Master shape now     : {master.shape}")
+
+
+# ----- Original Cell #66 -----
+# 7. CLV Proxy Feature
+'''
+No CLV column exists in the source data.
+So we build a proxy by summing total NetRevenue per customer across all their transactions.
+We then segment into Bronze/Silver/Gold/Platinum tiers using quartile cuts.
+'''
+
+clv_proxy = (
+    master.groupby('CustomerKey')['NetRevenue']
+    .sum()
+    .reset_index()
+    .rename(columns={'NetRevenue': 'CLV_Proxy'})
+)
+master = master.merge(clv_proxy, on='CustomerKey', how='left')
+
+master['CLV_Segment'] = pd.qcut(
+    master['CLV_Proxy'], q=4,
+    labels=['Bronze','Silver','Gold','Platinum']
+)
+
+print(f"CLV proxy built")
+print(f"   CLV_Proxy range : ${master['CLV_Proxy'].min():,.0f} – ${master['CLV_Proxy'].max():,.0f}")
+print(f"   CLV_Proxy mean  : ${master['CLV_Proxy'].mean():,.0f}")
+print(f"\n   Segment distribution:")
+print(master['CLV_Segment'].value_counts().sort_index())
+
+# ----- Original Cell #67 -----
+#8. Monthly Time Series with Lag & Rolling Features
+'''
+Aggregate transactions into a 24-month time series.
+Then add lag and rolling features.
+Lag1 = last month's value (momentum)
+Lag12 = same month last year (seasonality)
+Roll3 = 3-month moving average (trend smoothing)
+These are the direct inputs to forecasting models.
+'''
+
+monthly_ts = (
+    master.groupby(['Year','MonthNum'])
+    .agg(
+        Revenue       = ('SaleAmount',   'sum'),
+        Units         = ('UnitsSold',    'sum'),
+        NetRevenue    = ('NetRevenue',   'sum'),
+        AvgRevPerUnit = ('RevPerUnit',   'mean'),
+        Transactions  = ('SalesKey',     'count'),
+    )
+    .reset_index()
+    .sort_values(['Year','MonthNum'])
+    .reset_index(drop=True)
+)
+
+monthly_ts['TimeIndex']      = (monthly_ts['Year'] - 2022) * 12 + monthly_ts['MonthNum']
+monthly_ts['Revenue_Lag1']   = monthly_ts['Revenue'].shift(1)
+monthly_ts['Revenue_Lag2']   = monthly_ts['Revenue'].shift(2)
+monthly_ts['Revenue_Lag12']  = monthly_ts['Revenue'].shift(12)
+monthly_ts['Units_Lag1']     = monthly_ts['Units'].shift(1)
+monthly_ts['Units_Lag12']    = monthly_ts['Units'].shift(12)
+monthly_ts['Revenue_Roll3']  = monthly_ts['Revenue'].rolling(3).mean()
+monthly_ts['Revenue_Roll6']  = monthly_ts['Revenue'].rolling(6).mean()
+monthly_ts['Units_Roll3']    = monthly_ts['Units'].rolling(3).mean()
+monthly_ts['Revenue_MoM_pct']= monthly_ts['Revenue'].pct_change() * 100
+monthly_ts['Units_MoM_pct']  = monthly_ts['Units'].pct_change() * 100
+monthly_ts['MonthSin']       = np.sin(2 * np.pi * monthly_ts['MonthNum'] / 12)
+monthly_ts['MonthCos']       = np.cos(2 * np.pi * monthly_ts['MonthNum'] / 12)
+
+print(f"Monthly time series built — {monthly_ts.shape}")
+print(monthly_ts[['Year','MonthNum','Revenue','Units',
+                   'Revenue_Lag1','Revenue_Lag12',
+                   'Revenue_Roll3','Revenue_MoM_pct']].round(0).to_string())
+
+# ----- Original Cell #68 -----
+# 9. Brand-Level Monthly Time Series
+brand_monthly = (
+    master.groupby(['Brand','Year','MonthNum'])
+    .agg(Revenue=('SaleAmount','sum'), Units=('UnitsSold','sum'))
+    .reset_index()
+    .sort_values(['Brand','Year','MonthNum'])
+)
+
+brand_monthly['TimeIndex']     = (brand_monthly['Year'] - 2022) * 12 + brand_monthly['MonthNum']
+brand_monthly['Revenue_Lag1']  = brand_monthly.groupby('Brand')['Revenue'].shift(1)
+brand_monthly['Revenue_Lag12'] = brand_monthly.groupby('Brand')['Revenue'].shift(12)
+brand_monthly['Revenue_Roll3'] = brand_monthly.groupby('Brand')['Revenue'].transform(
+    lambda x: x.rolling(3).mean())
+brand_monthly['Units_Lag1']    = brand_monthly.groupby('Brand')['Units'].shift(1)
+
+print(f"Brand monthly series built — {brand_monthly.shape}")
+print(f"   Brands         : {brand_monthly['Brand'].nunique()}")
+print(f"   Months per brand (min): {brand_monthly.groupby('Brand').size().min()}")
+
+# ----- Original Cell #69 -----
+# 10. Seasonality Index
+'''
+Calculate how strong each month is relative to the annual average.
+Index > 1 means above-average month
+Index < 1 means below average.
+Used to scale forecasts up in strong months and down in weak months.
+'''
+
+annual_avg = monthly_ts['Revenue'].mean()
+
+seasonal = (
+    monthly_ts.groupby('MonthNum')['Revenue']
+    .mean()
+    .reset_index()
+    .rename(columns={'Revenue':'AvgRevenue'})
+)
+seasonal['SeasonalityIndex'] = (seasonal['AvgRevenue'] / annual_avg).round(3)
+
+month_names = {1:'January',2:'February',3:'March',4:'April',5:'May',6:'June',
+               7:'July',8:'August',9:'September',10:'October',11:'November',12:'December'}
+seasonal['MonthName'] = seasonal['MonthNum'].map(month_names)
+
+print("Seasonality index built")
+print(f"\n{'MonthName':<12} {'Index':>8}  {'Signal'}")
+print("─" * 36)
+for _, row in seasonal.iterrows():
+    signal = ("🔴 Weak"    if row['SeasonalityIndex'] < 0.85 else
+              "🟢 Strong"  if row['SeasonalityIndex'] > 1.15 else
+              "🟡 Average")
+    print(f"{row['MonthName']:<12} {row['SeasonalityIndex']:>8.3f}  {signal}")
+
+peak   = seasonal.loc[seasonal['SeasonalityIndex'].idxmax()]
+trough = seasonal.loc[seasonal['SeasonalityIndex'].idxmin()]
+print(f"\n   Peak   : {peak['MonthName']}   ({peak['SeasonalityIndex']:.3f}x)")
+print(f"   Trough : {trough['MonthName']} ({trough['SeasonalityIndex']:.3f}x)")
+
+# ----- Original Cell #70 -----
+# 11. Final Readiness Validation
+print("  PRE-FORECASTING READINESS CHECKLIST")
+
+checks = {
+    "No null SaleAmount"          : master['SaleAmount'].isnull().sum() == 0,
+    "No null NetRevenue"          : master['NetRevenue'].isnull().sum() == 0,
+    "No null TimeIndex"           : master['TimeIndex'].isnull().sum() == 0,
+    "No null MonthNum"            : master['MonthNum'].isnull().sum() == 0,
+    "No null Brand"               : master['Brand'].isnull().sum() == 0,
+    "No null Zone"                : master['Zone'].isnull().sum() == 0,
+    "No null AgeGroupCode"        : master['AgeGroupCode'].isnull().sum() == 0,
+    "No null IncomeGroupCode"     : master['IncomeGroupCode'].isnull().sum() == 0,
+    "No null CLV_Proxy"           : master['CLV_Proxy'].isnull().sum() == 0,
+    "No null CLV_Segment"         : master['CLV_Segment'].isnull().sum() == 0,
+    "No negative NetRevenue"      : (master['NetRevenue'] < 0).sum() == 0,
+    "No negative DiscountPct"     : (master['DiscountPct'] < 0).sum() == 0,
+    "DiscountPct <= 30%"          : (master['DiscountPct'] > 30).sum() == 0,
+    "24 months in time series"    : len(monthly_ts) == 24,
+    "All brands >= 12 months"     : brand_monthly.groupby('Brand').size().min() >= 12,
+    "No null Impressions in fmc"  : fmc['Impressions'].isnull().sum() == 0,
+    "Vehicle prices all >= $5K"   : (dim_vehicle['Price'] < 5000).sum() == 0,
+}
+
+all_ok = True
+for check, passed in checks.items():
+    icon = "yes" if passed else "no"
+    if not passed:
+        all_ok = False
+    print(f"  {icon}  {check}")
+
+print(f"\n   Master rows    : {len(master):,}")
+print(f"   Master columns : {len(master.columns)}")
+print(f"   Time series    : {len(monthly_ts)} months")
+
+if all_ok:
+    print("\n  ALL CHECKS PASSED — ready for forecasting")
+else:
+    print("\n  Fix failing checks before proceeding")
+
+# ----- Original Cell #71 -----
+# Save All Tables to Drive
+with pd.ExcelWriter(DRIVE_FILE, engine='openpyxl', mode='w') as writer:
+    fvs.to_excel(writer,          sheet_name='Fact_VehicleSales',                index=False)
+    ftd.to_excel(writer,          sheet_name='Fact_TestDrive',                   index=False)
+    fmc.to_excel(writer,          sheet_name='Fact_MarketingCampaignPerforman',  index=False)
+    dim_vehicle.to_excel(writer,  sheet_name='Dim_Vehicle',                      index=False)
+    dim_customer.to_excel(writer, sheet_name='Dim_Customer',                     index=False)
+    dim_dealer.to_excel(writer,   sheet_name='Dim_Dealer',                       index=False)
+    dim_region.to_excel(writer,   sheet_name='Dim_Region',                       index=False)
+    dim_channel.to_excel(writer,  sheet_name='Dim_Channel',                      index=False)
+    dim_campaign.to_excel(writer, sheet_name='Dim_Campaign',                     index=False)
+    dim_date.to_excel(writer,     sheet_name='Dim_Date',                         index=False)
+    dim_exec.to_excel(writer,     sheet_name='Dim_SalesExecutive',               index=False)
+    monthly_ts.to_excel(writer,   sheet_name='FE_Monthly_TimeSeries',            index=False)
+    brand_monthly.to_excel(writer,sheet_name='FE_Brand_Monthly',                 index=False)
+    seasonal.to_excel(writer,     sheet_name='FE_Seasonality_Index',             index=False)
+
+print("All tables saved to Drive")
+print("\n   Sheets saved: Fact_VehicleSales, Fact_TestDrive,")
+print("                 Fact_MarketingCampaignPerforman, Dim_Vehicle,")
+print("                 Dim_Customer, Dim_Dealer, Dim_Region, Dim_Channel,")
+print("                 Dim_Campaign, Dim_Date, Dim_SalesExecutive")
+print("\n   FE sheets: FE_Monthly_TimeSeries, FE_Brand_Monthly,")
+print("                 FE_Seasonality_Index")
+print("\nReady for forecasting")
