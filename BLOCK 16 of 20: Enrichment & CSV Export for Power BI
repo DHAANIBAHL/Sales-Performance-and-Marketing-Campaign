@@ -1,0 +1,115 @@
+# ============================================================
+# BLOCK 16 of 20: Enrichment & CSV Export for Power BI
+# ============================================================
+
+# ----- Original Cell #72 -----
+# Merge fvs with date and vehicle dimensions
+fvs_enriched = (
+    fvs
+    .merge(dim_date[['DateKey','Year','MonthName','MonthNum','Quarter']], on='DateKey', how='left')
+    .merge(dim_vehicle[['VehicleKey','Brand']], on='VehicleKey', how='left')
+)
+
+# 1. FE_Monthly_TimeSeries
+fe_monthly_timeseries = (
+    fvs_enriched
+    .groupby(['Year','MonthName','MonthNum','Quarter'], as_index=False)
+    .agg(
+        Total_Units    = ('UnitsSold',   'sum'),
+        Total_Revenue  = ('SaleAmount',  'sum'),
+        Total_Discount = ('Discount',    'sum'),
+        Num_Transactions = ('SalesKey',  'count'),
+    )
+    .assign(
+        Avg_Sale_Value   = lambda x: x['Total_Revenue']  / x['Num_Transactions'],
+        Avg_Discount     = lambda x: x['Total_Discount'] / x['Num_Transactions'],
+        Discount_Rate_Pct= lambda x: (x['Total_Discount'] / x['Total_Revenue'] * 100).round(2),
+        Period_Label     = lambda x: x['MonthName'] + ' ' + x['Year'].astype(str),
+    )
+    .sort_values(['Year','MonthNum'])
+    .reset_index(drop=True)
+)
+
+# 2. FE_Brand_Monthly
+fe_brand_monthly = (
+    fvs_enriched
+    .groupby(['Brand','Year','MonthName','MonthNum','Quarter'], as_index=False)
+    .agg(
+        Total_Units      = ('UnitsSold',  'sum'),
+        Total_Revenue    = ('SaleAmount', 'sum'),
+        Total_Discount   = ('Discount',   'sum'),
+        Num_Transactions = ('SalesKey',   'count'),
+    )
+    .assign(
+        Avg_Sale_Value    = lambda x: x['Total_Revenue']  / x['Num_Transactions'],
+        Discount_Rate_Pct = lambda x: (x['Total_Discount'] / x['Total_Revenue'] * 100).round(2),
+        Period_Label      = lambda x: x['MonthName'] + ' ' + x['Year'].astype(str),
+    )
+    .sort_values(['Brand','Year','MonthNum'])
+    .reset_index(drop=True)
+)
+
+# 3. FE_Seasonality_Index
+# How each month performs relative to the annual average (index = 1.0 is average)
+monthly_avg = (
+    fvs_enriched
+    .groupby(['Year','MonthNum','MonthName'], as_index=False)
+    .agg(Monthly_Revenue = ('SaleAmount', 'sum'),
+         Monthly_Units   = ('UnitsSold',  'sum'))
+)
+annual_avg = (
+    monthly_avg
+    .groupby('Year', as_index=False)
+    .agg(Annual_Avg_Revenue = ('Monthly_Revenue', 'mean'),
+         Annual_Avg_Units   = ('Monthly_Units',   'mean'))
+)
+fe_seasonality_index = (
+    monthly_avg
+    .merge(annual_avg, on='Year', how='left')
+    .assign(
+        Revenue_Seasonality_Index = lambda x: (x['Monthly_Revenue'] / x['Annual_Avg_Revenue']).round(4),
+        Units_Seasonality_Index   = lambda x: (x['Monthly_Units']   / x['Annual_Avg_Units']  ).round(4),
+    )
+    .sort_values(['Year','MonthNum'])
+    .reset_index(drop=True)
+)
+
+print(f"FE_Monthly_TimeSeries  : {len(fe_monthly_timeseries):,} rows")
+print(f"FE_Brand_Monthly       : {len(fe_brand_monthly):,} rows")
+print(f"FE_Seasonality_Index   : {len(fe_seasonality_index):,} rows")
+
+# ----- Original Cell #73 -----
+print(dim_date.columns.tolist())
+
+# ----- Original Cell #74 -----
+# # This cell exports all your working dataframes to CSV files in Google Drive, so they can be used in Power BI
+
+# import pandas as pd
+# import os
+
+# EXPORT_PATH = "/content/drive/MyDrive/PowerBI_Data/"
+# os.makedirs(EXPORT_PATH, exist_ok=True)
+
+# exports = {
+#     "Fact_VehicleSales":               fvs,
+#     "Fact_TestDrive":                  ftd,
+#     "Fact_MarketingCampaignPerforman": fmc,
+#     "Dim_Vehicle":                     dim_vehicle,
+#     "Dim_Customer":                    dim_customer,
+#     "Dim_Dealer":                      dim_dealer,
+#     "Dim_Region":                      dim_region,
+#     "Dim_Channel":                     dim_channel,
+#     "Dim_Campaign":                    dim_campaign,
+#     "Dim_Date":                        dim_date,
+#     "Dim_SalesExecutive":              dim_exec,
+#     "FE_Monthly_TimeSeries":           fe_monthly_timeseries,
+#     "FE_Brand_Monthly":                fe_brand_monthly,
+#     "FE_Seasonality_Index":            fe_seasonality_index,
+# }
+
+# for name, df in exports.items():
+#     path = f"{EXPORT_PATH}{name}.csv"
+#     df.to_csv(path, index=False)
+#     print(f"Exported {name} — {len(df):,} rows → {path}")
+
+# print(f"\nAll {len(exports)} files exported to {EXPORT_PATH}")
