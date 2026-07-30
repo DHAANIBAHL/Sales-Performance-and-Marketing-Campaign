@@ -1,0 +1,19 @@
+# ============================================================
+# BLOCK 02 of 20: Initial Data Checks — Columns & Unique Values
+# ============================================================
+
+# ----- Original Cell #3 -----
+print(dim_dealer.columns.tolist())
+
+# ----- Original Cell #4 -----
+# Check unique values
+print("Unique SaleAmount values:", fvs['SaleAmount'].nunique())
+print("Unique UnitsSold values:", fvs['UnitsSold'].nunique())
+
+# Check if values are literally all the same
+print("\nSaleAmount value counts:\n", fvs['SaleAmount'].value_counts().head(10))
+print("\nUnitsSold value counts:\n", fvs['UnitsSold'].value_counts().head(10))
+
+# Check a sample
+print("\nSample rows:")
+print(fvs[['SaleAmount', 'UnitsSold']].head(10))
