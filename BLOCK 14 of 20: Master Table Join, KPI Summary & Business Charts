@@ -1,0 +1,591 @@
+# ============================================================
+# BLOCK 14 of 20: Master Table Join, KPI Summary & Business Charts
+# ============================================================
+
+# ----- Original Cell #45 -----
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import warnings
+warnings.filterwarnings("ignore")
+import shutil
+
+DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+LOCAL_FILE  = "/content/Car Sales.xlsx"
+shutil.copy(DRIVE_FILE, LOCAL_FILE)
+
+all_sheets   = pd.read_excel(LOCAL_FILE, sheet_name=None)
+fvs          = all_sheets["Fact_VehicleSales"]
+ftd          = all_sheets["Fact_TestDrive"]
+fmc          = all_sheets["Fact_MarketingCampaignPerforman"]
+dim_date     = all_sheets["Dim_Date"]
+dim_vehicle  = all_sheets["Dim_Vehicle"]
+dim_customer = all_sheets["Dim_Customer"]
+dim_dealer   = all_sheets["Dim_Dealer"]
+dim_region   = all_sheets["Dim_Region"]
+dim_channel  = all_sheets["Dim_Channel"]
+dim_campaign = all_sheets["Dim_Campaign"]
+dim_exec     = all_sheets["Dim_SalesExecutive"]
+
+divider = "─" * 80
+
+def pretty(df, title, number, format_cols=None):
+    df = df.copy().reset_index(drop=True)
+    df.index = df.index + 1
+    if format_cols:
+        for col, fmt in format_cols.items():
+            if col in df.columns:
+                if fmt == "currency":
+                    df[col] = df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+                elif fmt == "pct":
+                    df[col] = df[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+                elif fmt == "int":
+                    df[col] = df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
+                elif fmt == "float2":
+                    df[col] = df[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+    print(f"\n{divider}")
+    print(f"  {number}. {title}")
+    print(divider)
+    print(df.to_string())
+    print(divider)
+
+print("All imports, data and helpers loaded!")
+print(f"   fvs:          {len(fvs):,} rows")
+print(f"   ftd:          {len(ftd):,} rows")
+print(f"   fmc:          {len(fmc):,} rows")
+print(f"   dim_vehicle:  {len(dim_vehicle):,} rows")
+print(f"   dim_customer: {len(dim_customer):,} rows")
+print(f"   dim_dealer:   {len(dim_dealer):,} rows")
+
+# ----- Original Cell #46 -----
+for name, df in all_sheets.items():
+    print(f"\n{'─'*60}")
+    print(f"  {name}")
+    print(f"{'─'*60}")
+    for col in df.columns:
+        print(f"    {col}")
+
+# ----- Original Cell #47 -----
+# Join Fact_VehicleSales with all dimension tables
+master = (
+    fvs
+    .merge(dim_date,     on="DateKey",      how="left", suffixes=("","_date"))
+    .merge(dim_vehicle,  on="VehicleKey",   how="left", suffixes=("","_veh"))
+    .merge(dim_customer, on="CustomerKey",  how="left", suffixes=("","_cust"))
+    .merge(dim_dealer,   on="DealerKey",    how="left", suffixes=("","_deal"))
+    .merge(dim_region,   on="RegionKey",    how="left", suffixes=("","_reg"))
+    .merge(dim_channel,  on="ChannelKey",   how="left", suffixes=("","_chan"))
+    .merge(dim_campaign, on="CampaignKey",  how="left", suffixes=("","_camp"))
+    .merge(dim_exec,     on="SalesExecKey", how="left", suffixes=("","_exec"))
+)
+
+# Join marketing fact
+mktg = (
+    fmc
+    .merge(dim_campaign, on="CampaignKey", how="left")
+    .merge(dim_channel,  on="ChannelKey",  how="left", suffixes=("","_chan"))
+    .merge(dim_date,     on="DateKey",     how="left", suffixes=("","_date"))
+)
+
+# Join test drive fact
+td = (
+    ftd
+    .merge(dim_vehicle,  on="VehicleKey",  how="left", suffixes=("","_veh"))
+    .merge(dim_customer, on="CustomerKey", how="left", suffixes=("","_cust"))
+    .merge(dim_dealer,   on="DealerKey",   how="left", suffixes=("","_deal"))
+    .merge(dim_channel,  on="ChannelKey",  how="left", suffixes=("","_chan"))
+    .merge(dim_date,     on="DateKey",     how="left", suffixes=("","_date"))
+)
+
+print(f"master shape  : {master.shape}")
+print(f"   mktg shape   : {mktg.shape}")
+print(f"   td shape     : {td.shape}")
+print(f"\nmaster columns:\n{list(master.columns)}")
+
+# ----- Original Cell #48 -----
+# KPI Summary
+total_rev   = master["SaleAmount"].sum()
+total_units = master["UnitsSold"].sum()
+avg_sale    = master["SaleAmount"].mean()
+avg_disc    = master["Discount"].mean()
+total_td    = len(ftd)
+camp_cost   = fmc["CampaignCost"].sum()
+camp_rev    = fmc["RevenueGenerated"].sum()
+roi         = (camp_rev - camp_cost) / camp_cost * 100
+leads       = fmc["Leads"].sum()
+bookings    = fmc["Bookings"].sum()
+conv        = bookings / leads * 100
+
+print("AUTOMOBILE KPI DASHBOARD")
+print(f"  Total Revenue       : ${total_rev:>15,.0f}")
+print(f"  Total Units Sold    : {total_units:>16,}")
+print(f"  Avg Sale Amount     : ${avg_sale:>15,.0f}")
+print(f"  Avg Discount        : {avg_disc:>15.2f}%")
+print(f"  Total Test Drives   : {total_td:>16,}")
+print(f"  Campaign Cost       : ${camp_cost:>15,.0f}")
+print(f"  Campaign Revenue    : ${camp_rev:>15,.0f}")
+print(f"  Campaign ROI        : {roi:>15.1f}%")
+print(f"  Lead → Booking      : {conv:>15.1f}%")
+
+
+# ----- Original Cell #49 -----
+# Monthly Revenue Trend
+import matplotlib.ticker as mtick
+
+master_ts              = master.copy()
+master_ts["_Date"]     = pd.to_datetime(master_ts["DateKey"].astype(str), format="%Y%m%d")
+master_ts["Month"]     = master_ts["_Date"].dt.month
+master_ts["MonthName"] = master_ts["_Date"].dt.strftime("%b")
+master_ts["Year"]      = master_ts["_Date"].dt.year
+
+monthly = (
+    master_ts
+    .groupby(["Year", "Month", "MonthName"], as_index=False)
+    .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum"))
+    .sort_values(["Year", "Month"])
+)
+monthly["Label"] = monthly["MonthName"] + " " + monthly["Year"].astype(str)
+
+fig, ax1 = plt.subplots(figsize=(16, 6))
+bars = ax1.bar(monthly["Label"], monthly["Revenue"]/1e7,
+               color="#3266ad", alpha=0.75, label="Revenue ($Cr)")
+for bar, rev in zip(bars, monthly["Revenue"]/1e7):
+    ax1.text(bar.get_x() + bar.get_width()/2,
+             bar.get_height() + 0.05,
+             f"${rev:.1f}Cr", ha="center", va="bottom",
+             fontsize=8, color="#1a3f6f", fontweight="bold", rotation=45)
+
+ax1.set_ylabel("Revenue ($ Cr)", fontsize=12)
+ax1.tick_params(axis="x", rotation=45)
+ax1.yaxis.set_major_formatter(mtick.FormatStrFormatter("%.0f"))
+ax1.set_ylim(0, monthly["Revenue"].max()/1e7 * 1.3)
+ax1.legend(loc="upper left")
+plt.title("Monthly Revenue", fontsize=14, fontweight="bold", pad=12)
+plt.tight_layout()
+plt.show()
+
+# Monthly Units Sold Trend
+fig, ax2 = plt.subplots(figsize=(16, 6))
+ax2.plot(monthly["Label"], monthly["Units"],
+         color="#e05c2a", linewidth=2.5, marker="o", markersize=7, label="Units Sold")
+for x, y in zip(range(len(monthly)), monthly["Units"]):
+    ax2.text(x, y + (monthly["Units"].max()*0.015),
+             f"{int(y):,}", ha="center", va="bottom",
+             fontsize=8, color="#b03a10", fontweight="bold")
+
+ax2.set_ylabel("Units Sold", fontsize=12)
+ax2.tick_params(axis="x", rotation=45)
+ax2.yaxis.set_major_formatter(mtick.FuncFormatter(lambda x, _: f"{int(x):,}"))
+ax2.set_ylim(0, monthly["Units"].max()*1.15)
+ax2.legend(loc="upper left")
+plt.title("Monthly Units Sold", fontsize=14, fontweight="bold", pad=12)
+plt.tight_layout()
+plt.show()
+
+pretty(monthly[["Label","Revenue","Units"]].rename(columns={"Label":"Month"}),
+       "Monthly Revenue & Units", 4,
+       format_cols={"Revenue":"currency","Units":"int"})
+
+# ----- Original Cell #50 -----
+# Statewise Sales
+# Chart 1
+state = (
+    master
+    .groupby("State", as_index=False)
+    .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum"),
+         Transactions=("SalesKey","count"))
+    .sort_values("Revenue", ascending=False)
+)
+
+fig, ax = plt.subplots(figsize=(12, 7))
+colors1 = plt.cm.Blues(np.linspace(0.4, 0.9, len(state)))[::-1]
+bars = ax.barh(state["State"][::-1], state["Revenue"][::-1]/1e6, color=colors1)
+for bar, val in zip(bars, state["Revenue"][::-1]/1e6):
+    ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height()/2,
+            f"${val:.1f}M", va="center", fontsize=9)
+ax.set_xlabel("Revenue ($M)")
+ax.set_title("Revenue by State", fontweight="bold", fontsize=13)
+ax.set_xlim(0, state["Revenue"].max()/1e6 * 1.2)
+plt.tight_layout()
+plt.show()
+
+# Chart 2
+fig, ax = plt.subplots(figsize=(12, 7))
+colors2 = plt.cm.Greens(np.linspace(0.4, 0.9, len(state)))[::-1]
+bars = ax.barh(state["State"][::-1], state["Units"][::-1], color=colors2)
+for bar, val in zip(bars, state["Units"][::-1]):
+    ax.text(bar.get_width() + 5, bar.get_y() + bar.get_height()/2,
+            f"{int(val):,}", va="center", fontsize=9)
+ax.set_xlabel("Units Sold")
+ax.set_title("Units Sold by State", fontweight="bold", fontsize=13)
+ax.set_xlim(0, state["Units"].max() * 1.15)
+plt.tight_layout()
+plt.show()
+
+pretty(state, "Statewise Sales", 5,
+       format_cols={"Revenue":"currency","Units":"int","Transactions":"int"})
+
+# ----- Original Cell #51 -----
+# Citywise Sales (Top 15)
+# Chart 1
+city = (
+    master
+    .groupby("City", as_index=False)
+    .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum"))
+    .sort_values("Revenue", ascending=False)
+    .head(15)
+)
+
+fig, ax = plt.subplots(figsize=(12, 7))
+colors = plt.cm.OrRd(np.linspace(0.35, 0.85, len(city)))[::-1]
+bars = ax.barh(city["City"][::-1], city["Revenue"][::-1]/1e6, color=colors)
+for bar, val in zip(bars, city["Revenue"][::-1]/1e6):
+    ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height()/2,
+            f"${val:.1f}M", va="center", fontsize=9)
+ax.set_xlabel("Revenue ($M)")
+ax.set_title("Top 15 Cities — Revenue", fontweight="bold", fontsize=13)
+ax.set_xlim(0, city["Revenue"].max()/1e6 * 1.2)
+plt.tight_layout()
+plt.show()
+
+# Chart 2 — City Revenue Ranking
+city_sorted = city.sort_values("Revenue", ascending=False)
+
+total_rev = city_sorted["Revenue"].sum()
+
+colors = (["#1F3864"] * 3 +
+          [plt.cm.Blues(0.3 + 0.5 * i / (len(city_sorted) - 4))
+           for i in range(len(city_sorted) - 3)])
+
+fig, ax = plt.subplots(figsize=(14, 7))
+fig.patch.set_facecolor("#FAFAFA")
+ax.set_facecolor("#FAFAFA")
+
+bars = ax.barh(city_sorted["City"][::-1],
+               city_sorted["Revenue"][::-1] / 1e6,
+               color=colors[::-1],
+               edgecolor="white", linewidth=0.8, height=0.65)
+
+for bar, val, pct in zip(
+        bars,
+        city_sorted["Revenue"][::-1] / 1e6,
+        city_sorted["Revenue"][::-1] / total_rev * 100):
+    ax.text(bar.get_width() + 0.3,
+            bar.get_y() + bar.get_height() / 2,
+            f"${val:.1f}M  ({pct:.1f}%)",
+            va="center", ha="left",
+            fontsize=9, fontweight="bold", color="#333")
+
+ax.set_title("City Revenue Ranking",
+             fontweight="bold", fontsize=13, pad=12)
+ax.set_xlabel("Revenue ($ Million)", fontsize=11)
+ax.grid(axis="x", alpha=0.2, linestyle=":")
+ax.spines[["top","right"]].set_visible(False)
+ax.spines["bottom"].set_color("#ccc")
+ax.margins(x=0.2)
+
+plt.tight_layout()
+plt.show()
+
+pretty(city_sorted, "Citywise Sales", 6,
+       format_cols={"Revenue":"currency", "Units":"int"})
+
+# ----- Original Cell #52 -----
+# Campaign Comparison
+mktg = (
+    fmc
+    .merge(dim_campaign, on="CampaignKey", how="left")
+    .merge(dim_channel,  on="ChannelKey",  how="left", suffixes=("","_chan"))
+    .merge(dim_date,     on="DateKey",     how="left", suffixes=("","_date"))
+)
+print(f"mktg built — {mktg.shape}")
+camp = (
+    mktg.groupby("CampaignName", as_index=False)
+    .agg(
+        Impressions = ("Impressions",      "sum"),
+        Leads       = ("Leads",            "sum"),
+        TestDrives  = ("TestDrives",       "sum"),
+        Bookings    = ("Bookings",         "sum"),
+        Cost        = ("CampaignCost",     "sum"),
+        Revenue     = ("RevenueGenerated", "sum"),
+    )
+)
+camp["ROI_%"]  = ((camp["Revenue"] - camp["Cost"]) / camp["Cost"] * 100).round(1)
+camp["Conv_%"] = (camp["Bookings"] / camp["Leads"] * 100).round(2)
+camp["CPL"]    = (camp["Cost"] / camp["Leads"]).round(0)
+print(f"camp built — {len(camp)} campaigns")
+print(camp[["CampaignName","Cost","Revenue","ROI_%","Status"]].to_string()
+      if "Status" in camp.columns
+      else camp[["CampaignName","Cost","Revenue","ROI_%"]].to_string())
+
+
+pretty(camp, "Campaign Performance Summary", 7,
+       format_cols={"Cost":"currency","Revenue":"currency",
+                    "ROI_%":"pct","Conv_%":"pct","CPL":"currency"})
+
+
+
+import matplotlib.pyplot as plt
+
+camp_sorted = camp.sort_values("ROI_%", ascending=False).reset_index(drop=True)
+n = len(camp_sorted)
+print(f"Total campaigns: {n}")
+
+# Chart 1: Top 15 campaigns by ROI
+top15 = camp_sorted.head(15).sort_values("ROI_%")  # ascending for horizontal bar order
+fig, ax = plt.subplots(figsize=(9, 7))
+colors = ["#2ecc71" if v > 0 else "#e74c3c" for v in top15["ROI_%"]]
+bars = ax.barh(top15["CampaignName"], top15["ROI_%"], color=colors)
+for bar, val in zip(bars, top15["ROI_%"]):
+    ax.text(bar.get_width() + (1 if val >= 0 else -1),
+            bar.get_y() + bar.get_height()/2,
+            f"{val:.1f}%", va="center",
+            ha="left" if val >= 0 else "right",
+            fontsize=9, fontweight="bold")
+ax.axvline(0, color="black", linewidth=0.8)
+ax.set_title("Top 15 Campaigns by ROI (%)", fontweight="bold", fontsize=13)
+ax.set_xlabel("ROI %")
+plt.tight_layout()
+plt.savefig("/content/campaign_roi_top15.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 2: Bottom 15 campaigns by ROI
+bottom15 = camp_sorted.tail(15).sort_values("ROI_%")
+fig, ax = plt.subplots(figsize=(9, 7))
+colors = ["#2ecc71" if v > 0 else "#e74c3c" for v in bottom15["ROI_%"]]
+bars = ax.barh(bottom15["CampaignName"], bottom15["ROI_%"], color=colors)
+for bar, val in zip(bars, bottom15["ROI_%"]):
+    ax.text(bar.get_width() + (1 if val >= 0 else -1),
+            bar.get_y() + bar.get_height()/2,
+            f"{val:.1f}%", va="center",
+            ha="left" if val >= 0 else "right",
+            fontsize=9, fontweight="bold")
+ax.axvline(0, color="black", linewidth=0.8)
+ax.set_title("Bottom 15 Campaigns by ROI (%)", fontweight="bold", fontsize=13)
+ax.set_xlabel("ROI %")
+plt.tight_layout()
+plt.savefig("/content/campaign_roi_bottom15.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+
+
+
+
+# ----- Original Cell #53 -----
+# Channel Analysis — Leads vs Test Drives by Channel
+chan_mktg = (
+    mktg.groupby("ChannelName", as_index=False)
+    .agg(Leads=("Leads","sum"), TestDrives=("TestDrives","sum"),
+         Bookings=("Bookings","sum"))
+)
+chan_sales = (
+    master.groupby("ChannelName", as_index=False)
+    .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum"))
+    .sort_values("Revenue", ascending=False)
+)
+
+fig, ax = plt.subplots(figsize=(10, 5))
+x = np.arange(len(chan_mktg))
+w = 0.35
+b1 = ax.bar(x-w/2, chan_mktg["Leads"],      w, label="Leads",       color="#3266ad")
+b2 = ax.bar(x+w/2, chan_mktg["TestDrives"], w, label="Test Drives", color="#0e9f7c")
+for bar in b1:
+    h = bar.get_height()
+    ax.text(bar.get_x()+bar.get_width()/2, h+5, f"{int(h):,}",
+            ha="center", va="bottom", fontsize=8)
+for bar in b2:
+    h = bar.get_height()
+    ax.text(bar.get_x()+bar.get_width()/2, h+5, f"{int(h):,}",
+            ha="center", va="bottom", fontsize=8)
+ax.set_xticks(x)
+ax.set_xticklabels(chan_mktg["ChannelName"], rotation=20, ha="right", fontsize=9)
+ax.set_title("Leads vs Test Drives by Channel", fontweight="bold", fontsize=13)
+ax.set_ylim(0, chan_mktg["Leads"].max() * 1.2)
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+pretty(chan_sales.merge(chan_mktg, on="ChannelName", how="outer"),
+       "Channel Summary", 8,
+       format_cols={"Revenue":"currency","Units":"int","Leads":"int","TestDrives":"int"})
+
+# ----- Original Cell #54 -----
+# Vehicle Analysis
+# CHart 1
+fuel = (master.groupby("FuelType", as_index=False)
+        .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum")))
+body = (master.groupby("BodyType", as_index=False)
+        .agg(Units=("UnitsSold","sum"), Revenue=("SaleAmount","sum"))
+        .sort_values("Units", ascending=False))
+brand = (master.groupby("Brand", as_index=False)
+         .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum"))
+         .sort_values("Revenue", ascending=False))
+
+fig, ax = plt.subplots(figsize=(8, 7))
+wedges, texts, autotexts = ax.pie(
+    fuel["Revenue"], labels=fuel["FuelType"], autopct="%1.1f%%",
+    startangle=90, colors=["#3266ad","#e05c2a","#3a9f6e","#7c3aed"],
+    wedgeprops=dict(width=0.55), textprops={"fontsize": 10}
+)
+ax.set_title("Revenue by Fuel Type", fontweight="bold", fontsize=13)
+plt.tight_layout()
+plt.show()
+
+# Chart 2
+fig, ax = plt.subplots(figsize=(10, 5))
+bars = ax.bar(body["BodyType"], body["Units"],
+              color=plt.cm.Pastel1.colors[:len(body)])
+for bar, val in zip(bars, body["Units"]):
+    ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+5,
+            f"{int(val):,}", ha="center", fontsize=9, fontweight="bold")
+ax.set_title("Units Sold by Body Type", fontweight="bold", fontsize=13)
+ax.set_ylabel("Units")
+ax.set_ylim(0, body["Units"].max() * 1.15)
+ax.tick_params(axis="x", rotation=20)
+plt.tight_layout()
+plt.show()
+
+# Chart 3
+fig, ax = plt.subplots(figsize=(10, max(5, len(brand)*0.5)))
+colors_b = plt.cm.tab10.colors[:len(brand)]
+bars = ax.barh(brand["Brand"][::-1], brand["Revenue"][::-1]/1e6, color=colors_b)
+for bar, val in zip(bars, brand["Revenue"][::-1]/1e6):
+    ax.text(bar.get_width()+0.1, bar.get_y()+bar.get_height()/2,
+            f"${val:.1f}M", va="center", fontsize=9)
+ax.set_title("Revenue by Brand", fontweight="bold", fontsize=13)
+ax.set_xlabel("Revenue ($M)")
+ax.set_xlim(0, brand["Revenue"].max()/1e6 * 1.2)
+plt.tight_layout()
+plt.show()
+
+pretty(brand, "Brand Revenue & Units", 9,
+       format_cols={"Revenue":"currency","Units":"int"})
+
+
+
+# ----- Original Cell #55 -----
+# Customer Demographics
+age_order = ["18-25","26-35","36-45","46-55","55+"]
+dem = (master.groupby(["AgeGroup","IncomeGroup"], as_index=False)
+       .agg(Count=("SalesKey","count")))
+income_groups = sorted(dem["IncomeGroup"].unique())
+
+# Chart 2
+fig, ax = plt.subplots(figsize=(7, 7))
+gender = master.groupby("Gender")["SaleAmount"].sum()
+ax.pie(gender.values, labels=gender.index, autopct="%1.1f%%",
+       colors=["#3266ad","#c0517a","#73726c"],
+       wedgeprops=dict(width=0.55), startangle=90,
+       textprops={"fontsize": 11})
+ax.set_title("Revenue by Gender", fontweight="bold", fontsize=13)
+plt.tight_layout()
+plt.show()
+
+# Chart 3
+ctype = (master.groupby("CustomerType", as_index=False)
+         .agg(Revenue=("SaleAmount","sum")))
+
+fig, ax = plt.subplots(figsize=(8, 5))
+bars = ax.bar(ctype["CustomerType"], ctype["Revenue"]/1e6,
+              color=["#3266ad","#3a9f6e","#d97706"])
+for bar, (_, row) in zip(bars, ctype.iterrows()):
+    ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.1,
+            f"${row['Revenue']/1e6:.1f}M",
+            ha="center", fontweight="bold", fontsize=10)
+ax.set_title("Revenue by Customer Type", fontweight="bold", fontsize=13)
+ax.set_ylabel("Revenue ($M)")
+ax.set_ylim(0, ctype["Revenue"].max()/1e6 * 1.2)
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #56 -----
+master["Quarter"] = master["Quarter"].astype(str)
+master["Quarter"] = master["Quarter"].apply(lambda x: x if x.startswith("Q") else f"Q{x}")
+
+# Zone & Quarterly Revenue
+zone_q = (
+    master.groupby(["Zone","Quarter"], as_index=False)
+    .agg(Revenue=("SaleAmount","sum"))
+    .sort_values("Quarter")
+)
+
+# ----- Original Cell #57 -----
+# Zone & Quarterly Revenue
+# Chart 1
+zone_q = (
+    master.groupby(["Zone","Quarter"], as_index=False)
+    .agg(Revenue=("SaleAmount","sum"))
+    .sort_values("Quarter")
+)
+
+fig, ax = plt.subplots(figsize=(10, 5))
+for zone, grp in zone_q.groupby("Zone"):
+    ax.plot(grp["Quarter"].astype(str), grp["Revenue"]/1e6,
+            marker="o", linewidth=2.5, markersize=7, label=zone)
+    for _, row in grp.iterrows():
+        ax.text(str(row["Quarter"]), row["Revenue"]/1e6 + zone_q["Revenue"].max()/1e6*0.01,
+                f"${row['Revenue']/1e6:.1f}M", ha="center", va="bottom", fontsize=7.5)
+ax.set_title("Quarterly Revenue by Zone", fontweight="bold", fontsize=13)
+ax.set_xlabel("Quarter")
+ax.set_ylabel("Revenue ($M)")
+ax.legend()
+ax.grid(axis="y", alpha=0.3)
+ax.set_ylim(0, zone_q["Revenue"].max()/1e6 * 1.2)
+plt.tight_layout()
+plt.show()
+
+# Chart2
+zones    = zone_q["Zone"].unique()
+quarters = sorted(zone_q["Quarter"].unique())
+x = np.arange(len(quarters))
+w = 0.18
+colors_z = ["#3266ad","#3a9f6e","#d97706","#bf5a27"]
+
+fig, ax = plt.subplots(figsize=(11, 5))
+for i, zone in enumerate(zones):
+    vals = [zone_q[(zone_q["Zone"]==zone) & (zone_q["Quarter"]==q)]["Revenue"].sum()/1e6
+            for q in quarters]
+    bars = ax.bar(x + i*w, vals, w, label=zone, color=colors_z[i])
+    for bar, v in zip(bars, vals):
+        ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.1,
+                f"${v:.1f}M", ha="center", va="bottom", fontsize=7, rotation=45)
+
+ax.set_xticks(x + w*(len(zones)-1)/2)
+ax.set_xticklabels([f"Q{q}" for q in quarters])
+ax.set_title("Revenue by Zone & Quarter", fontweight="bold", fontsize=13)
+ax.set_ylabel("Revenue ($M)")
+ax.set_ylim(0, zone_q["Revenue"].max()/1e6 * 1.35)
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+pretty(zone_q, "Zone Quarterly Revenue", 11, format_cols={"Revenue":"currency"})
+
+
+
+# ----- Original Cell #58 -----
+# Dealer Performance
+# Chart 1
+dealer = (
+    master.groupby("DealerName", as_index=False)
+    .agg(Revenue=("SaleAmount","sum"), Units=("UnitsSold","sum"),
+         AvgDiscount=("Discount","mean"), Transactions=("SalesKey","count"))
+    .sort_values("Revenue", ascending=False)
+)
+
+fig, ax = plt.subplots(figsize=(11, max(6, len(dealer)*0.45)))
+colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(dealer)))[::-1]
+bars = ax.barh(dealer["DealerName"][::-1], dealer["Revenue"][::-1]/1e6, color=colors)
+for bar, val in zip(bars, dealer["Revenue"][::-1]/1e6):
+    ax.text(bar.get_width()+0.1, bar.get_y()+bar.get_height()/2,
+            f"${val:.1f}M", va="center", fontsize=9)
+ax.set_title("Dealer Revenue Ranking", fontweight="bold", fontsize=13)
+ax.set_xlabel("Revenue ($M)")
+ax.set_xlim(0, dealer["Revenue"].max()/1e6 * 1.2)
+plt.tight_layout()
+plt.show()
+
+pretty(dealer, "Dealer Performance Summary", 12,
+       format_cols={"Revenue":"currency","Units":"int",
+                    "AvgDiscount":"float2","Transactions":"int"})
