@@ -1,0 +1,638 @@
+# ============================================================
+# BLOCK 13 of 20: Data Cleaning — All Fact & Dimension Tables
+# ============================================================
+
+# ----- Original Cell #35 -----
+import pandas as pd
+import numpy as np
+from IPython.display import display
+
+DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+LOCAL_FILE  = "/content/Car Sales.xlsx"
+
+all_sheets2  = pd.read_excel(DRIVE_FILE, sheet_name=None)
+fvs          = all_sheets2["Fact_VehicleSales"].copy()
+ftd          = all_sheets2["Fact_TestDrive"].copy()
+fmc          = all_sheets2["Fact_MarketingCampaignPerforman"].copy()
+dim_date     = all_sheets2["Dim_Date"].copy()
+dim_vehicle  = all_sheets2["Dim_Vehicle"].copy()
+dim_customer = all_sheets2["Dim_Customer"].copy()
+dim_dealer   = all_sheets2["Dim_Dealer"].copy()
+dim_region   = all_sheets2["Dim_Region"].copy()
+dim_channel  = all_sheets2["Dim_Channel"].copy()
+dim_campaign = all_sheets2["Dim_Campaign"].copy()
+dim_exec     = all_sheets2["Dim_SalesExecutive"].copy()
+
+print("DATA CLEANING")
+
+before = pd.DataFrame({
+    "Sheet": list(all_sheets2.keys()),
+    "Rows":  [df.shape[0] for df in all_sheets2.values()],
+    "Nulls": [df.isnull().sum().sum() for df in all_sheets2.values()],
+    "Duplicates": [df.duplicated().sum() for df in all_sheets2.values()]
+})
+before.index = range(1, len(before)+1)
+print("Before Cleaning:")
+display(before)
+
+# ----- Original Cell #36 -----
+print("CLEANING: FACT_VEHICLESALES")
+
+print(f"\nBefore: {len(fvs):,} rows | "
+      f"Nulls: {fvs.isnull().sum().sum()} | "
+      f"Duplicates: {fvs.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(fvs)
+fvs = fvs.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: "
+      f"{before_rows - len(fvs)} rows dropped")
+
+# Impute SaleAmount
+# Critical column but median imputation is safe since
+# distribution is fairly symmetric after outlier removal
+n_null = fvs["SaleAmount"].isnull().sum()
+fvs["SaleAmount"] = fvs["SaleAmount"].fillna(fvs["SaleAmount"].median())
+print(f"\n2. SaleAmount nulls imputed with median "
+      f"(${fvs['SaleAmount'].median():,.0f}): {n_null} rows filled")
+
+# Impute Discount
+n_null = fvs["Discount"].isnull().sum()
+fvs["Discount"] = fvs["Discount"].fillna(fvs["Discount"].median())
+print(f"\n3. Discount nulls imputed with median "
+      f"(${fvs['Discount'].median():,.0f}): {n_null} rows filled")
+
+# Impute ChannelKey
+# Categorical FK
+n_null = fvs["ChannelKey"].isnull().sum()
+fvs["ChannelKey"] = fvs["ChannelKey"].fillna(fvs["ChannelKey"].mode()[0])
+print(f"\n4. ChannelKey nulls imputed with mode "
+      f"({int(fvs['ChannelKey'].mode()[0])}): {n_null} rows filled")
+
+# Impute RegionKey
+n_null = fvs["RegionKey"].isnull().sum()
+fvs["RegionKey"] = fvs["RegionKey"].fillna(fvs["RegionKey"].mode()[0])
+print(f"\n5. RegionKey nulls imputed with mode "
+      f"({int(fvs['RegionKey'].mode()[0])}): {n_null} rows filled")
+
+# Impute SalesExecKey
+n_null = fvs["SalesExecKey"].isnull().sum()
+fvs["SalesExecKey"] = fvs["SalesExecKey"].fillna(fvs["SalesExecKey"].mode()[0])
+print(f"\n6 — SalesExecKey nulls imputed with mode "
+      f"({int(fvs['SalesExecKey'].mode()[0])}): {n_null} rows filled")
+
+# Fix UnitsSold nulls → 1
+n_null = fvs["UnitsSold"].isnull().sum()
+fvs["UnitsSold"] = fvs["UnitsSold"].fillna(1)
+print(f"\n7. UnitsSold nulls filled with 1: {n_null} rows filled")
+
+# Convert keys to int
+for col in ["ChannelKey","RegionKey","SalesExecKey","UnitsSold"]:
+    fvs[col] = fvs[col].astype(int)
+
+print(f"\nAfter:  {len(fvs):,} rows | "
+      f"Nulls: {fvs.isnull().sum().sum()} | "
+      f"Duplicates: {fvs.duplicated().sum()}")
+
+# Summary Table
+print("\nFact_VehicleSales — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step": ["Remove Duplicates","Impute SaleAmount","Impute Discount",
+             "Impute ChannelKey","Impute RegionKey",
+             "Impute SalesExecKey","Fix UnitsSold"],
+    "Method": ["drop_duplicates()","fillna(median)","fillna(median)",
+               "fillna(mode)","fillna(mode)","fillna(mode)","fillna(1)"],
+    "Reason": ["Exact duplicate rows inflate all aggregations",
+               "Critical measure — median preserves distribution",
+               "Critical measure — median preserves distribution",
+               "FK — mode assigns most common channel",
+               "FK — mode assigns most common region",
+               "FK — mode assigns most common exec",
+               "Each row = 1 sale by definition"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #37 -----
+print("CLEANING: FACT_TESTDRIVE")
+
+print(f"\nBefore: {len(ftd):,} rows | "
+      f"Nulls: {ftd.isnull().sum().sum()} | "
+      f"Duplicates: {ftd.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(ftd)
+ftd = ftd.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: {before_rows - len(ftd)} rows dropped")
+
+# Drop null Outcome rows (critical — cannot impute)
+# Cannot guess if a customer converted or not
+n_null = ftd["Outcome"].isnull().sum()
+ftd = ftd.dropna(subset=["Outcome"]).reset_index(drop=True)
+print(f"\n2. Outcome nulls DROPPED (cannot impute): {n_null} rows dropped")
+
+# Impute ChannelKey (mode)
+n_null = ftd["ChannelKey"].isnull().sum()
+ftd["ChannelKey"] = ftd["ChannelKey"].fillna(ftd["ChannelKey"].mode()[0])
+print(f"\n3. ChannelKey nulls imputed with mode "
+      f"({int(ftd['ChannelKey'].mode()[0])}): {n_null} rows filled")
+
+# Impute DealerKey (mode)
+n_null = ftd["DealerKey"].isnull().sum()
+ftd["DealerKey"] = ftd["DealerKey"].fillna(ftd["DealerKey"].mode()[0])
+print(f"\n4. DealerKey nulls imputed with mode "
+      f"({int(ftd['DealerKey'].mode()[0])}): {n_null} rows filled")
+
+# Convert keys to int
+for col in ["ChannelKey","DealerKey"]:
+    ftd[col] = ftd[col].astype(int)
+
+print(f"\nAfter:  {len(ftd):,} rows | "
+      f"Nulls: {ftd.isnull().sum().sum()} | "
+      f"Duplicates: {ftd.duplicated().sum()}")
+
+# Summary Table
+print("\nFact_TestDrive — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Drop Outcome Nulls",
+               "Impute ChannelKey","Impute DealerKey"],
+    "Method": ["drop_duplicates()","dropna()",
+               "fillna(mode)","fillna(mode)"],
+    "Reason": ["Duplicate test drive records inflate conversion rate",
+               "Cannot guess if customer converted or not",
+               "FK — mode assigns most common channel",
+               "FK — mode assigns most common dealer"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #38 -----
+print("CLEANING: FACT_MARKETINGCAMPAIGN")
+
+print(f"\nBefore: {len(fmc):,} rows | "
+      f"Nulls: {fmc.isnull().sum().sum()} | "
+      f"Duplicates: {fmc.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(fmc)
+fmc = fmc.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: {before_rows - len(fmc)} rows dropped")
+
+# Drop null/negative CampaignCost (critical — cannot calculate ROI)
+n_null = fmc["CampaignCost"].isnull().sum()
+n_neg  = (fmc["CampaignCost"] < 0).sum()
+fmc = fmc.dropna(subset=["CampaignCost"]).reset_index(drop=True)
+fmc = fmc[fmc["CampaignCost"] > 0].reset_index(drop=True)
+print(f"\n2. CampaignCost nulls dropped: {n_null} | "
+      f"Negative values dropped: {n_neg}")
+
+# Impute RevenueGenerated (median)
+n_null = fmc["RevenueGenerated"].isnull().sum()
+fmc["RevenueGenerated"] = fmc["RevenueGenerated"].fillna(
+    fmc["RevenueGenerated"].median())
+print(f"\n3. RevenueGenerated nulls imputed with median "
+      f"(${fmc['RevenueGenerated'].median():,.0f}): {n_null} rows filled")
+
+# Fix funnel violation: TestDrives > Leads
+# TestDrives cannot exceed Leads — cap at Leads value
+n_viol = (fmc["TestDrives"] > fmc["Leads"]).sum()
+fmc.loc[fmc["TestDrives"] > fmc["Leads"], "TestDrives"] = \
+    fmc.loc[fmc["TestDrives"] > fmc["Leads"], "Leads"]
+print(f"\n4. Fixed TestDrives > Leads: {n_viol} rows capped")
+
+# Fix funnel violation: Bookings > TestDrives
+# Bookings cannot exceed TestDrives — cap at TestDrives value
+n_viol = (fmc["Bookings"] > fmc["TestDrives"]).sum()
+fmc.loc[fmc["Bookings"] > fmc["TestDrives"], "Bookings"] = \
+    fmc.loc[fmc["Bookings"] > fmc["TestDrives"], "TestDrives"]
+print(f"\n5. Fixed Bookings > TestDrives: {n_viol} rows capped")
+
+print(f"\nAfter:  {len(fmc):,} rows | "
+      f"Nulls: {fmc.isnull().sum().sum()} | "
+      f"Duplicates: {fmc.duplicated().sum()}")
+
+# Summary Table
+print("\nFact_MarketingCampaign — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Drop Null/Negative CampaignCost",
+               "Impute RevenueGenerated",
+               "Fix TestDrives > Leads","Fix Bookings > TestDrives"],
+    "Method": ["drop_duplicates()","dropna() + filter > 0",
+               "fillna(median)",
+               "Cap at Leads value","Cap at TestDrives value"],
+    "Reason": ["Duplicate rows inflate all funnel metrics",
+               "ROI calculation impossible without valid cost",
+               "Median imputation safe for revenue",
+               "Funnel logic violation — impossible in reality",
+               "Funnel logic violation — impossible in reality"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #39 -----
+print("CLEANING: DIM_CUSTOMER")
+
+print(f"\nBefore: {len(dim_customer):,} rows | "
+      f"Nulls: {dim_customer.isnull().sum().sum()} | "
+      f"Duplicates: {dim_customer.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_customer)
+dim_customer = dim_customer.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: "
+      f"{before_rows - len(dim_customer)} rows dropped")
+
+# Fix invalid AgeGroup values → set to null first
+valid_ages = ["Under 25","25-34","35-44","45-54","55-64","65+"]
+n_invalid  = (~dim_customer["AgeGroup"].isin(valid_ages) &
+               dim_customer["AgeGroup"].notna()).sum()
+dim_customer.loc[~dim_customer["AgeGroup"].isin(valid_ages),
+                 "AgeGroup"] = np.nan
+print(f"\n2. Invalid AgeGroup values set to null: {n_invalid} rows")
+
+# Impute AgeGroup (mode)
+n_null = dim_customer["AgeGroup"].isnull().sum()
+dim_customer["AgeGroup"] = dim_customer["AgeGroup"].fillna(
+    dim_customer["AgeGroup"].mode()[0])
+print(f"\n3. AgeGroup nulls imputed with mode "
+      f"({dim_customer['AgeGroup'].mode()[0]}): {n_null} rows filled")
+
+# Fix invalid Gender values → set to null first
+valid_genders = ["Male","Female"]
+n_invalid     = (~dim_customer["Gender"].isin(valid_genders) &
+                  dim_customer["Gender"].notna()).sum()
+dim_customer.loc[~dim_customer["Gender"].isin(valid_genders),
+                 "Gender"] = np.nan
+print(f"\n4. Invalid Gender values set to null: {n_invalid} rows")
+
+# Impute Gender (mode)
+n_null = dim_customer["Gender"].isnull().sum()
+dim_customer["Gender"] = dim_customer["Gender"].fillna(
+    dim_customer["Gender"].mode()[0])
+print(f"\n5. Gender nulls imputed with mode "
+      f"({dim_customer['Gender'].mode()[0]}): {n_null} rows filled")
+
+# Impute IncomeGroup (mode)
+n_null = dim_customer["IncomeGroup"].isnull().sum()
+dim_customer["IncomeGroup"] = dim_customer["IncomeGroup"].fillna(
+    dim_customer["IncomeGroup"].mode()[0])
+print(f"\n6. IncomeGroup nulls imputed with mode "
+      f"({dim_customer['IncomeGroup'].mode()[0]}): {n_null} rows filled")
+
+# Impute City (mode per State)
+# State-level mode is more accurate than global mode
+n_null = dim_customer["City"].isnull().sum()
+dim_customer["City"] = dim_customer.groupby("State")["City"]\
+    .transform(lambda x: x.fillna(
+        x.mode()[0] if len(x.mode()) > 0 else "Unknown"))
+print(f"\n7. City nulls imputed with most common city per State: "
+      f"{n_null} rows filled")
+
+print(f"\nAfter:  {len(dim_customer):,} rows | "
+      f"Nulls: {dim_customer.isnull().sum().sum()} | "
+      f"Duplicates: {dim_customer.duplicated().sum()}")
+
+# Summary Table
+print("\nDim_Customer — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Fix Invalid AgeGroup",
+               "Impute AgeGroup","Fix Invalid Gender",
+               "Impute Gender","Impute IncomeGroup","Impute City"],
+    "Method": ["drop_duplicates()","Set to null",
+               "fillna(mode)","Set to null",
+               "fillna(mode)","fillna(mode)","fillna(mode per State)"],
+    "Reason": ["Duplicate customers inflate CLV and counts",
+               "Values like 'Invalid','99-100' are data entry errors",
+               "Mode is safest for categorical demographic data",
+               "Values like 'X','?' are data entry errors",
+               "Mode assigns most common gender",
+               "Mode assigns most common income group",
+               "State-based mode more accurate than global mode"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #40 -----
+print("CLEANING: DIM_VEHICLE")
+
+print(f"\nBefore: {len(dim_vehicle):,} rows | "
+      f"Nulls: {dim_vehicle.isnull().sum().sum()} | "
+      f"Duplicates: {dim_vehicle.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_vehicle)
+dim_vehicle = dim_vehicle.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: "
+      f"{before_rows - len(dim_vehicle)} rows dropped")
+
+# Impute Price (median per Brand)
+# Brand-level median more accurate than global median
+n_null = dim_vehicle["Price"].isnull().sum()
+dim_vehicle["Price"] = dim_vehicle.groupby("Brand")["Price"]\
+    .transform(lambda x: x.fillna(x.median()))
+dim_vehicle["Price"] = dim_vehicle["Price"].fillna(
+    dim_vehicle["Price"].median())
+print(f"\n2. Price nulls imputed with median per Brand: "
+      f"{n_null} rows filled")
+
+# Impute FuelType (mode per Brand)
+# Brands typically use consistent fuel types
+n_null = dim_vehicle["FuelType"].isnull().sum()
+dim_vehicle["FuelType"] = dim_vehicle.groupby("Brand")["FuelType"]\
+    .transform(lambda x: x.fillna(
+        x.mode()[0] if len(x.mode()) > 0 else "Petrol"))
+print(f"\n3. FuelType nulls imputed with mode per Brand: "
+      f"{n_null} rows filled")
+
+# Impute Transmission (mode per Brand)
+n_null = dim_vehicle["Transmission"].isnull().sum()
+dim_vehicle["Transmission"] = dim_vehicle.groupby("Brand")["Transmission"]\
+    .transform(lambda x: x.fillna(
+        x.mode()[0] if len(x.mode()) > 0 else "Auto"))
+print(f"\n4. Transmission nulls imputed with mode per Brand: "
+      f"{n_null} rows filled")
+
+# Impute BodyType (mode per Brand)
+n_null = dim_vehicle["BodyType"].isnull().sum()
+dim_vehicle["BodyType"] = dim_vehicle.groupby("Brand")["BodyType"]\
+    .transform(lambda x: x.fillna(
+        x.mode()[0] if len(x.mode()) > 0 else "SUV"))
+print(f"\n5. BodyType nulls imputed with mode per Brand: "
+      f"{n_null} rows filled")
+
+print(f"\nAfter:  {len(dim_vehicle):,} rows | "
+      f"Nulls: {dim_vehicle.isnull().sum().sum()} | "
+      f"Duplicates: {dim_vehicle.duplicated().sum()}")
+
+# Summary Table
+print("\nDim_Vehicle — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Impute Price",
+               "Impute FuelType","Impute Transmission","Impute BodyType"],
+    "Method": ["drop_duplicates()","fillna(median per Brand)",
+               "fillna(mode per Brand)","fillna(mode per Brand)",
+               "fillna(mode per Brand)"],
+    "Reason": ["Duplicate vehicles cause double counting in analysis",
+               "Brand-level median more accurate than global median",
+               "Brand typically uses consistent fuel types",
+               "Brand typically uses consistent transmission types",
+               "Brand typically produces consistent body types"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #41 -----
+print("CLEANING: DIM_DEALER")
+
+print(f"\nBefore: {len(dim_dealer):,} rows | "
+      f"Nulls: {dim_dealer.isnull().sum().sum()} | "
+      f"Duplicates: {dim_dealer.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_dealer)
+dim_dealer = dim_dealer.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: "
+      f"{before_rows - len(dim_dealer)} rows dropped")
+
+# Impute DealerType (mode)
+n_null = dim_dealer["DealerType"].isnull().sum()
+dim_dealer["DealerType"] = dim_dealer["DealerType"].fillna(
+    dim_dealer["DealerType"].mode()[0])
+print(f"\n2. DealerType nulls imputed with mode "
+      f"({dim_dealer['DealerType'].mode()[0]}): {n_null} rows filled")
+
+# Impute City (mode per State)
+n_null = dim_dealer["City"].isnull().sum()
+dim_dealer["City"] = dim_dealer.groupby("State")["City"]\
+    .transform(lambda x: x.fillna(
+        x.mode()[0] if len(x.mode()) > 0 else "Unknown"))
+print(f"\n3. City nulls imputed with most common city per State: "
+      f"{n_null} rows filled")
+
+print(f"\nAfter:  {len(dim_dealer):,} rows | "
+      f"Nulls: {dim_dealer.isnull().sum().sum()} | "
+      f"Duplicates: {dim_dealer.duplicated().sum()}")
+
+# Summary Table
+print("\nDim_Dealer — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Impute DealerType","Impute City"],
+    "Method": ["drop_duplicates()","fillna(mode)","fillna(mode per State)"],
+    "Reason": ["Duplicate dealers inflate dealer count metrics",
+               "Mode assigns most common dealer type",
+               "State-level mode more accurate than global"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #42 -----
+print("CLEANING: DIM_CAMPAIGN")
+
+print(f"\nBefore: {len(dim_campaign):,} rows | "
+      f"Nulls: {dim_campaign.isnull().sum().sum()} | "
+      f"Duplicates: {dim_campaign.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_campaign)
+dim_campaign = dim_campaign.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: "
+      f"{before_rows - len(dim_campaign)} rows dropped")
+
+# Fix invalid dates (EndDate < StartDate)
+# Swap dates where EndDate comes before StartDate
+dim_campaign["StartDate"] = pd.to_datetime(dim_campaign["StartDate"])
+dim_campaign["EndDate"]   = pd.to_datetime(dim_campaign["EndDate"])
+n_invalid = (dim_campaign["EndDate"] < dim_campaign["StartDate"]).sum()
+mask = dim_campaign["EndDate"] < dim_campaign["StartDate"]
+dim_campaign.loc[mask, ["StartDate","EndDate"]] = \
+    dim_campaign.loc[mask, ["EndDate","StartDate"]].values
+print(f"\n2. Fixed invalid dates (EndDate < StartDate): "
+      f"{n_invalid} rows swapped")
+
+# Fix negative/zero Budget → replace with median
+n_invalid = (dim_campaign["Budget"] <= 0).sum()
+median_budget = dim_campaign["Budget"][dim_campaign["Budget"] > 0].median()
+dim_campaign.loc[dim_campaign["Budget"] <= 0, "Budget"] = median_budget
+print(f"\n3. Negative/zero Budget replaced with median "
+      f"(${median_budget:,.0f}): {n_invalid} rows fixed")
+
+# Impute CampaignType (mode)
+n_null = dim_campaign["CampaignType"].isnull().sum()
+dim_campaign["CampaignType"] = dim_campaign["CampaignType"].fillna(
+    dim_campaign["CampaignType"].mode()[0])
+print(f"\n4. CampaignType nulls imputed with mode "
+      f"({dim_campaign['CampaignType'].mode()[0]}): {n_null} rows filled")
+
+# Impute Budget nulls (median)
+n_null = dim_campaign["Budget"].isnull().sum()
+dim_campaign["Budget"] = dim_campaign["Budget"].fillna(
+    dim_campaign["Budget"].median())
+print(f"\n5. Budget nulls imputed with median "
+      f"(${dim_campaign['Budget'].median():,.0f}): {n_null} rows filled")
+
+print(f"\nAfter:  {len(dim_campaign):,} rows | "
+      f"Nulls: {dim_campaign.isnull().sum().sum()} | "
+      f"Duplicates: {dim_campaign.duplicated().sum()}")
+
+# Summary Table
+print("\nDim_Campaign — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Fix Invalid Dates",
+               "Fix Negative Budget",
+               "Impute CampaignType","Impute Budget"],
+    "Method": ["drop_duplicates()","Swap StartDate & EndDate",
+               "Replace with median",
+               "fillna(mode)","fillna(median)"],
+    "Reason": ["Duplicate campaigns inflate budget totals",
+               "EndDate before StartDate is impossible",
+               "Negative budget is impossible — likely data entry error",
+               "Mode assigns most common campaign type",
+               "Median preserves budget distribution"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #43 -----
+print("CLEANING: DIM_SALESEXECUTIVE")
+
+print(f"\nBefore: {len(dim_exec):,} rows | "
+      f"Nulls: {dim_exec.isnull().sum().sum()} | "
+      f"Duplicates: {dim_exec.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_exec)
+dim_exec = dim_exec.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: "
+      f"{before_rows - len(dim_exec)} rows dropped")
+
+# Impute Experience (median per Dealer)
+# Dealer-level median more accurate — same dealer
+# likely has similar experience levels
+n_null = dim_exec["Experience"].isnull().sum()
+dim_exec["Experience"] = dim_exec.groupby("DealerKey")["Experience"]\
+    .transform(lambda x: x.fillna(x.median()))
+dim_exec["Experience"] = dim_exec["Experience"].fillna(
+    dim_exec["Experience"].median())
+dim_exec["Experience"] = dim_exec["Experience"].round(0).astype(int)
+print(f"\n2. Experience nulls imputed with median per Dealer "
+      f"({int(dim_exec['Experience'].median())} yrs): {n_null} rows filled")
+
+print(f"\nAfter:  {len(dim_exec):,} rows | "
+      f"Nulls: {dim_exec.isnull().sum().sum()} | "
+      f"Duplicates: {dim_exec.duplicated().sum()}")
+
+# Summary Table
+print("\nDim_SalesExecutive — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Step":   ["Remove Duplicates","Impute Experience"],
+    "Method": ["drop_duplicates()","fillna(median per Dealer)"],
+    "Reason": ["Duplicate execs inflate headcount and performance metrics",
+               "Dealer-level median more accurate than global median"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
+
+# ----- Original Cell #44 -----
+print("CLEANING: DIM_DATE / DIM_REGION / DIM_CHANNEL")
+
+# Dim_Date
+print(f"\nDim_Date Before: {len(dim_date):,} rows | "
+      f"Nulls: {dim_date.isnull().sum().sum()} | "
+      f"Duplicates: {dim_date.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_date)
+dim_date = dim_date.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: {before_rows - len(dim_date)} rows dropped")
+
+# Impute MonthName from Month number (always derivable)
+month_map = {1:"January",2:"February",3:"March",4:"April",
+             5:"May",6:"June",7:"July",8:"August",
+             9:"September",10:"October",11:"November",12:"December"}
+n_null = dim_date["MonthName"].isnull().sum()
+dim_date["MonthName"] = dim_date.apply(
+    lambda row: month_map[row["Month"]]
+    if pd.isnull(row["MonthName"]) else row["MonthName"], axis=1)
+print(f"\n2. MonthName nulls derived from Month number: {n_null} rows filled")
+
+# Impute Quarter from Month number (always derivable)
+def get_quarter(month):
+    if month in [1,2,3]:    return "Q1"
+    if month in [4,5,6]:    return "Q2"
+    if month in [7,8,9]:    return "Q3"
+    if month in [10,11,12]: return "Q4"
+
+n_null = dim_date["Quarter"].isnull().sum()
+dim_date["Quarter"] = dim_date.apply(
+    lambda row: get_quarter(row["Month"])
+    if pd.isnull(row["Quarter"]) else row["Quarter"], axis=1)
+print(f"\n3. Quarter nulls derived from Month number: {n_null} rows filled")
+
+print(f"\nDim_Date After:  {len(dim_date):,} rows | "
+      f"Nulls: {dim_date.isnull().sum().sum()} | "
+      f"Duplicates: {dim_date.duplicated().sum()}")
+
+# Dim_Region
+print(f"\nDim_Region Before: {len(dim_region):,} rows | "
+      f"Nulls: {dim_region.isnull().sum().sum()} | "
+      f"Duplicates: {dim_region.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_region)
+dim_region = dim_region.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: {before_rows - len(dim_region)} rows dropped")
+
+# Impute Zone (mode)
+n_null = dim_region["Zone"].isnull().sum()
+dim_region["Zone"] = dim_region["Zone"].fillna(
+    dim_region["Zone"].mode()[0])
+print(f"\n2. Zone nulls imputed with mode "
+      f"({dim_region['Zone'].mode()[0]}): {n_null} rows filled")
+
+print(f"\nDim_Region After:  {len(dim_region):,} rows | "
+      f"Nulls: {dim_region.isnull().sum().sum()} | "
+      f"Duplicates: {dim_region.duplicated().sum()}")
+
+# Dim_Channel
+print(f"\nDim_Channel Before: {len(dim_channel):,} rows | "
+      f"Nulls: {dim_channel.isnull().sum().sum()} | "
+      f"Duplicates: {dim_channel.duplicated().sum()}")
+
+# Remove duplicates
+before_rows = len(dim_channel)
+dim_channel = dim_channel.drop_duplicates().reset_index(drop=True)
+print(f"\n1. Removed duplicates: {before_rows - len(dim_channel)} rows dropped")
+
+# Impute Medium (mode)
+n_null = dim_channel["Medium"].isnull().sum()
+dim_channel["Medium"] = dim_channel["Medium"].fillna(
+    dim_channel["Medium"].mode()[0])
+print(f"\n2. Medium nulls imputed with mode "
+      f"({dim_channel['Medium'].mode()[0]}): {n_null} rows filled")
+
+print(f"\nDim_Channel After:  {len(dim_channel):,} rows | "
+      f"Nulls: {dim_channel.isnull().sum().sum()} | "
+      f"Duplicates: {dim_channel.duplicated().sum()}")
+
+# Summary Table
+print("\nDim_Date / Dim_Region / Dim_Channel — Cleaning Summary:")
+summary = pd.DataFrame({
+    "Sheet":  ["Dim_Date","Dim_Date","Dim_Date",
+               "Dim_Region","Dim_Region",
+               "Dim_Channel","Dim_Channel"],
+    "Step":   ["Remove Duplicates","Impute MonthName","Impute Quarter",
+               "Remove Duplicates","Impute Zone",
+               "Remove Duplicates","Impute Medium"],
+    "Method": ["drop_duplicates()","Derived from Month number",
+               "Derived from Month number","drop_duplicates()",
+               "fillna(mode)","drop_duplicates()","fillna(mode)"],
+    "Reason": ["Duplicate dates cause double counting in time series",
+               "Month number always present — name always derivable",
+               "Quarter always derivable from month number",
+               "Duplicate regions inflate regional metrics",
+               "Mode assigns most common zone",
+               "Duplicate channels inflate channel metrics",
+               "Mode assigns most common medium"]
+})
+summary.index = range(1, len(summary)+1)
+display(summary)
