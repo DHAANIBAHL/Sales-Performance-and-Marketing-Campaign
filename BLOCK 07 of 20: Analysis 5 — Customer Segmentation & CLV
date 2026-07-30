@@ -1,0 +1,355 @@
+# ============================================================
+# BLOCK 07 of 20: Analysis 5 — Customer Segmentation & CLV
+# ============================================================
+
+# ----- Original Cell #10 -----
+# ANALYSIS 5: Customer Segmentation & CLV
+from IPython.display import display
+
+sales_cust = fvs.merge(dim_customer, on="CustomerKey", how="left")
+
+# CLV per customer
+clv = (
+    sales_cust
+    .groupby(["CustomerKey","CustomerName","CustomerType","AgeGroup","IncomeGroup","Gender"])
+    .agg(CLV=("SaleAmount","sum"), Purchases=("SalesKey","count"))
+    .reset_index()
+    .sort_values("CLV", ascending=False)
+)
+
+top10pct       = clv[clv["CLV"] >= clv["CLV"].quantile(0.90)]
+top10pct_share = top10pct["CLV"].sum() / clv["CLV"].sum() * 100
+
+# 5.1 CLV Summary Statistics
+summary_df = pd.DataFrame({
+    "Metric": ["Unique Customers","Average CLV","Median CLV",
+               "Highest CLV","Top 10% Threshold","Top 10% Revenue Share"],
+    "Value":  [f"{clv['CustomerKey'].nunique():,}",
+               f"${clv['CLV'].mean():,.0f}",
+               f"${clv['CLV'].median():,.0f}",
+               f"${clv['CLV'].max():,.0f}",
+               f"${clv['CLV'].quantile(0.90):,.0f}",
+               f"{top10pct_share:.1f}%"]
+})
+summary_df.index = range(1, len(summary_df) + 1)
+print("  5.1. CLV Summary Statistics")
+display(summary_df)
+
+# 5.2 Top 15 Customers by CLV
+top15_clv = clv.head(15)[["CustomerName","CustomerType","AgeGroup","IncomeGroup","CLV","Purchases"]].copy()
+top15_clv.index = range(1, len(top15_clv) + 1)
+print("  5.2. Top 15 Customers by CLV")
+display(top15_clv.style.format({"CLV":"${:,.0f}","Purchases":"{:,}"}))
+
+# 5.3 CLV by Customer Type
+type_clv = (
+    clv.groupby("CustomerType")
+    .agg(AvgCLV=("CLV","mean"), MedianCLV=("CLV","median"),
+         TotalRevenue=("CLV","sum"), Customers=("CustomerKey","count"),
+         AvgPurchases=("Purchases","mean"))
+    .reset_index()
+    .sort_values("AvgCLV", ascending=False)
+)
+new_clv   = type_clv[type_clv["CustomerType"]=="New"]["AvgCLV"].values[0]
+loyal_clv = type_clv[type_clv["CustomerType"]=="Loyal"]["AvgCLV"].values[0]
+multiplier = loyal_clv / new_clv
+
+type_clv.index = range(1, len(type_clv) + 1)
+print("  5.3. CLV by Customer Type")
+display(type_clv.style.format({
+    "AvgCLV":"${:,.0f}","MedianCLV":"${:,.0f}",
+    "TotalRevenue":"${:,.0f}","Customers":"{:,}","AvgPurchases":"{:.1f}"
+}))
+print(f"\n  💡 Loyalty Multiplier: {multiplier:.1f}x")
+print(f"     Loyal avg CLV: ${loyal_clv:,.0f}  |  New avg CLV: ${new_clv:,.0f}")
+print(f"     Retaining 1 Loyal customer = acquiring {multiplier:.1f} New customers in revenue terms")
+
+# 5.4 Revenue by Age Group
+age_order = ["Under 25","25-34","35-44","45-54","55-64","65+"]
+age_perf  = (
+    sales_cust.groupby("AgeGroup")
+    .agg(TotalRevenue=("SaleAmount","sum"),
+         Customers=("CustomerKey","nunique"),
+         AvgSpend=("SaleAmount","mean"))
+    .reset_index()
+)
+age_perf["AgeGroup"] = pd.Categorical(age_perf["AgeGroup"],
+                                       categories=age_order, ordered=True)
+age_perf = age_perf.sort_values("AgeGroup")
+age_perf.index = range(1, len(age_perf) + 1)
+print("  5.4. Revenue by Age Group")
+display(age_perf.style.format({
+    "TotalRevenue":"${:,.0f}","Customers":"{:,}","AvgSpend":"${:,.0f}"
+}))
+
+# 5.5 Revenue by Income Group
+income_order = ["Low","Lower-Middle","Middle","Upper-Middle","High"]
+inc_perf     = (
+    sales_cust.groupby("IncomeGroup")
+    .agg(TotalRevenue=("SaleAmount","sum"),
+         Customers=("CustomerKey","nunique"),
+         AvgSpend=("SaleAmount","mean"))
+    .reset_index()
+)
+inc_perf["IncomeGroup"] = pd.Categorical(inc_perf["IncomeGroup"],
+                                          categories=income_order, ordered=True)
+inc_perf = inc_perf.sort_values("IncomeGroup")
+inc_perf.index = range(1, len(inc_perf) + 1)
+print("  5.5. Revenue by Income Group")
+display(inc_perf.style.format({
+    "TotalRevenue":"${:,.0f}","Customers":"{:,}","AvgSpend":"${:,.0f}"
+}))
+
+# 5.6 Revenue by Gender
+gender_perf = (
+    sales_cust.groupby("Gender")
+    .agg(TotalRevenue=("SaleAmount","sum"),
+         AvgSpend=("SaleAmount","mean"),
+         Customers=("CustomerKey","nunique"))
+    .reset_index()
+)
+gender_perf.index = range(1, len(gender_perf) + 1)
+print("  5.6. Revenue by Gender")
+display(gender_perf.style.format({
+    "TotalRevenue":"${:,.0f}","AvgSpend":"${:,.0f}","Customers":"{:,}"
+}))
+
+# 5.7 Top 10% Customer Profile
+profile_df = pd.DataFrame({
+    "Attribute": ["Customers in Top 10%","Most Common Age Group",
+                  "Most Common Income Group","Most Common Customer Type",
+                  "Gender — Male","Gender — Female"],
+    "Value":     [f"{len(top10pct):,}",
+                  top10pct["AgeGroup"].mode()[0],
+                  top10pct["IncomeGroup"].mode()[0],
+                  top10pct["CustomerType"].mode()[0],
+                  f"{(top10pct['Gender']=='Male').sum():,}",
+                  f"{(top10pct['Gender']=='Female').sum():,}"]
+})
+profile_df.index = range(1, len(profile_df) + 1)
+print("  5.7. Top 10% Customer Demographic Profile")
+display(profile_df)
+
+# Charts
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import pandas as pd
+import numpy as np
+from IPython.display import display
+
+sales_cust = fvs.merge(dim_customer, on="CustomerKey", how="left")
+
+clv = (
+    sales_cust
+    .groupby(["CustomerKey","CustomerName","CustomerType","AgeGroup","IncomeGroup","Gender"])
+    .agg(CLV=("SaleAmount","sum"), Purchases=("SalesKey","count"))
+    .reset_index()
+    .sort_values("CLV", ascending=False)
+)
+
+top10pct       = clv[clv["CLV"] >= clv["CLV"].quantile(0.90)]
+top10pct_share = top10pct["CLV"].sum() / clv["CLV"].sum() * 100
+
+type_clv = (
+    clv.groupby("CustomerType")
+    .agg(AvgCLV=("CLV","mean"), MedianCLV=("CLV","median"),
+         TotalRevenue=("CLV","sum"), Customers=("CustomerKey","count"),
+         AvgPurchases=("Purchases","mean"))
+    .reset_index()
+    .sort_values("AvgCLV", ascending=False)
+)
+loyal_clv  = type_clv[type_clv["CustomerType"]=="Loyal"]["AvgCLV"].values[0]
+new_clv    = type_clv[type_clv["CustomerType"]=="New"]["AvgCLV"].values[0]
+multiplier = loyal_clv / new_clv
+
+age_order = ["Under 25","25-34","35-44","45-54","55-64","65+"]
+age_perf  = (
+    sales_cust.groupby("AgeGroup")
+    .agg(TotalRevenue=("SaleAmount","sum"),
+         Customers=("CustomerKey","nunique"),
+         AvgSpend=("SaleAmount","mean"))
+    .reset_index()
+)
+age_perf["AgeGroup"] = pd.Categorical(age_perf["AgeGroup"],
+                                       categories=age_order, ordered=True)
+age_perf = age_perf.sort_values("AgeGroup")
+
+income_order = ["Low","Lower-Middle","Middle","Upper-Middle","High"]
+inc_perf     = (
+    sales_cust.groupby("IncomeGroup")
+    .agg(TotalRevenue=("SaleAmount","sum"),
+         Customers=("CustomerKey","nunique"),
+         AvgSpend=("SaleAmount","mean"))
+    .reset_index()
+)
+inc_perf["IncomeGroup"] = pd.Categorical(inc_perf["IncomeGroup"],
+                                          categories=income_order, ordered=True)
+inc_perf = inc_perf.sort_values("IncomeGroup")
+
+gender_perf = (
+    sales_cust.groupby("Gender")
+    .agg(TotalRevenue=("SaleAmount","sum"),
+         AvgSpend=("SaleAmount","mean"),
+         Customers=("CustomerKey","nunique"))
+    .reset_index()
+)
+
+# Chart 1: CLV by Customer Type
+fig, ax = plt.subplots(figsize=(8, 5))
+vals   = type_clv["AvgCLV"].values
+labels = type_clv["CustomerType"].values
+
+bars = ax.bar(range(len(labels)), vals,
+              color=["#70AD47","#2E75B6","#1F3864"])
+for bar, val in zip(bars, vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + bar.get_height()*0.01,
+            f"${val:,.0f}", ha="center", va="bottom",
+            fontsize=11, fontweight="bold")
+
+ax.plot(range(len(vals)), vals, "o-",
+        color="#FFC000", linewidth=2, markersize=7, label="Trend")
+
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels)
+ax.set_title("Avg CLV by Customer Type", fontsize=14, fontweight="bold")
+ax.set_ylabel("Avg CLV ($)")
+ax.margins(y=0.2)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a5_chart1_clv_by_type.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 2: Revenue by Age Group
+fig, ax = plt.subplots(figsize=(9, 5))
+age_labels = age_perf["AgeGroup"].astype(str).values
+age_vals   = age_perf["TotalRevenue"].values
+
+bars = ax.bar(range(len(age_labels)), age_vals, color="#2E75B6")
+for bar, val in zip(bars, age_vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + bar.get_height()*0.01,
+            f"${val:,.0f}", ha="center", va="bottom",
+            fontsize=9, fontweight="bold", rotation=15)
+
+ax.plot(range(len(age_vals)), age_vals, "o-",
+        color="#FFC000", linewidth=2, markersize=7, label="Trend")
+
+ax.set_xticks(range(len(age_labels)))
+ax.set_xticklabels(age_labels, rotation=20)
+ax.set_title("Revenue by Age Group", fontsize=14, fontweight="bold")
+ax.set_ylabel("Total Revenue ($)")
+ax.margins(y=0.25)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a5_chart2_age_revenue.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 3: Avg Spend by Income Group
+fig, ax = plt.subplots(figsize=(9, 5))
+inc_labels = inc_perf["IncomeGroup"].astype(str).values
+inc_vals   = inc_perf["AvgSpend"].values
+
+bars = ax.bar(range(len(inc_labels)), inc_vals, color="#1F3864")
+for bar, val in zip(bars, inc_vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + bar.get_height()*0.01,
+            f"${val:,.0f}", ha="center", va="bottom",
+            fontsize=10, fontweight="bold")
+
+ax.plot(range(len(inc_vals)), inc_vals, "o-",
+        color="#FFC000", linewidth=2, markersize=7, label="Trend")
+
+ax.set_xticks(range(len(inc_labels)))
+ax.set_xticklabels(inc_labels, rotation=20)
+ax.set_title("Avg Spend by Income Group", fontsize=14, fontweight="bold")
+ax.set_ylabel("Avg Spend per Transaction ($)")
+ax.margins(y=0.2)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a5_chart3_income_spend.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 4: CLV Distribution
+fig, ax = plt.subplots(figsize=(14, 6))
+n, bins, patches = ax.hist(clv["CLV"], bins=40, color="#2E75B6", edgecolor="white")
+
+for count, patch in zip(n, patches):
+    if count > 0:
+        ax.text(patch.get_x() + patch.get_width()/2,
+                patch.get_height() + 0.5,
+                f"{int(count)}", ha="center", va="bottom",
+                fontsize=7, fontweight="bold", rotation=90)
+
+bin_mids = 0.5 * (bins[:-1] + bins[1:])
+ax.plot(bin_mids, n, "o-", color="#FFC000",
+        linewidth=2, markersize=4, label="Trend")
+
+for i, (left_edge, patch) in enumerate(zip(bins, patches)):
+    ax.text(patch.get_x(), -ax.get_ylim()[1]*0.04,
+            f"${left_edge/1000:.1f}K", ha="center", va="top",
+            fontsize=6.5, color="black", rotation=90)
+
+ax.set_xticks([])
+ax.set_title("CLV Distribution — How Customer Value is Spread",
+             fontsize=14, fontweight="bold")
+ax.set_xlabel("Customer Lifetime Value ($K)", labelpad=50)
+ax.set_ylabel("Number of Customers")
+ax.margins(y=0.25)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a5_chart4_clv_distribution.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# Chart 5: Revenue by Gender
+fig, ax = plt.subplots(figsize=(7, 5))
+gen_labels = gender_perf["Gender"].astype(str).values
+gen_vals   = gender_perf["TotalRevenue"].values
+
+bars = ax.bar(range(len(gen_labels)), gen_vals,
+              color=["#2E75B6","#E63946"], width=0.4)
+for bar, val in zip(bars, gen_vals):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + bar.get_height()*0.01,
+            f"${val/1_000_000:.1f}M", ha="center", va="bottom",
+            fontsize=11, fontweight="bold")
+
+ax.plot(range(len(gen_vals)), gen_vals, "o-",
+        color="#FFC000", linewidth=2, markersize=8, label="Trend")
+
+ax.set_xticks(range(len(gen_labels)))
+ax.set_xticklabels(gen_labels)
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x/1_000_000:.0f}M"))
+ax.set_title("Total Revenue by Gender", fontsize=14, fontweight="bold")
+ax.set_ylabel("Total Revenue")
+ax.margins(y=0.2)
+ax.legend()
+plt.tight_layout()
+plt.savefig("/content/a5_chart5_gender_revenue.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+print("Analysis 5 complete")
+
+# ----- Original Cell #11 -----
+import pandas as pd
+
+DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+all_sheets = pd.read_excel(DRIVE_FILE, sheet_name=None)
+fvs_final    = all_sheets["Fact_VehicleSales"]
+dim_customer = all_sheets["Dim_Customer"]
+
+spend_check = fvs_final.merge(dim_customer[["CustomerKey","IncomeGroup"]], on="CustomerKey", how="left")
+print("Current avg SaleAmount by IncomeGroup:")
+print(spend_check.groupby("IncomeGroup")["SaleAmount"].mean().round(0))
+
+# ----- Original Cell #12 -----
+# Check purchase frequency distribution
+print("Purchase frequency distribution:")
+print(clv["Purchases"].value_counts().sort_index().to_string())
+print(f"\nCustomers with only 1 purchase: {(clv['Purchases']==1).sum():,} ({(clv['Purchases']==1).mean()*100:.1f}%)")
+print(f"Customers with 2+ purchases:    {(clv['Purchases']>=2).sum():,} ({(clv['Purchases']>=2).mean()*100:.1f}%)")
+print(f"\nCLV stats:")
+print(f"   Min:    ${clv['CLV'].min():,.0f}")
+print(f"   Max:    ${clv['CLV'].max():,.0f}")
+print(f"   Mean:   ${clv['CLV'].mean():,.0f}")
+print(f"   Median: ${clv['CLV'].median():,.0f}")
