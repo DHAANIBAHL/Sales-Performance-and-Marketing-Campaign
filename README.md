@@ -1,5 +1,4 @@
-# Sales-Performance-and-Marketing-Campaign
-# Vehicle Inventory Forecasting & Sales Analytics
+# Sales Performance and Marketing Campaign
 
 An end-to-end project that takes a raw automotive sales dataset all the way through to a validated, production-ready demand forecasting model. It started as a data analysis exercise and grew into a full pipeline: cleaning and extending the dataset, building out business KPIs, and then spending a serious amount of time getting the forecasting right, not just picking a model that looked good, but actually stress-testing it until I trusted the number.
 
