@@ -1,0 +1,94 @@
+# ============================================================
+# BLOCK 01 of 20: Setup — Drive Mount, Config, Core Imports
+# ============================================================
+
+# ----- Original Cell #0 -----
+from google.colab import drive
+drive.mount('/content/drive')
+
+# ----- Original Cell #1 -----
+# import os
+# import pandas as pd
+
+# CORRUPT   = "/content/drive/MyDrive/Car Sales.xlsx"
+# RECOVERED = "/content/drive/MyDrive/Car Sales RECOVERED.xlsx"
+# FINAL     = "/content/drive/MyDrive/Car Sales.xlsx"
+
+# # Step 1: Delete corrupted file
+# if os.path.exists(CORRUPT):
+#     os.remove(CORRUPT)
+#     print("Deleted corrupted Car Sales.xlsx")
+# else:
+#     print("Corrupted file not found — already deleted")
+
+# # Step 2: Rename recovered file
+# os.rename(RECOVERED, FINAL)
+# print("Renamed Car Sales RECOVERED.xlsx → Car Sales.xlsx")
+
+# # Step 3: Verify
+# test = pd.read_excel(FINAL, sheet_name=None)
+# print(f"\nFile is clean and readable!")
+# print(f"   Total sheets: {len(test)}")
+# for name, df in test.items():
+#     print(f"   {name:<45} {df.shape[0]:>6,} rows")
+
+# # Step 4: Reset variables
+# DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+# LOCAL_FILE  = "/content/Car Sales.xlsx"
+# print(f"\nDone! Everything back to normal")
+# print(f"   DRIVE_FILE = {DRIVE_FILE}")
+
+# ----- Original Cell #2 -----
+# Mount drive for relavant files
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
+import shutil
+
+DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+LOCAL_FILE  = "/content/Car Sales.xlsx"
+shutil.copy(DRIVE_FILE, LOCAL_FILE)
+
+all_sheets   = pd.read_excel(LOCAL_FILE, sheet_name=None)
+fvs          = all_sheets["Fact_VehicleSales"]
+ftd          = all_sheets["Fact_TestDrive"]
+fmc          = all_sheets["Fact_MarketingCampaignPerforman"]
+dim_date     = all_sheets["Dim_Date"]
+dim_vehicle  = all_sheets["Dim_Vehicle"]
+dim_customer = all_sheets["Dim_Customer"]
+dim_dealer   = all_sheets["Dim_Dealer"]
+dim_region   = all_sheets["Dim_Region"]
+dim_channel  = all_sheets["Dim_Channel"]
+dim_campaign = all_sheets["Dim_Campaign"]
+dim_exec     = all_sheets["Dim_SalesExecutive"]
+
+def pretty(df, title, number, format_cols=None):
+    """Print a numbered, formatted table with a title."""
+    df = df.copy().reset_index(drop=True)
+    df.index = df.index + 1
+
+    if format_cols:
+        for col, fmt in format_cols.items():
+            if col in df.columns:
+                if fmt == "currency":
+                    df[col] = df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+                elif fmt == "pct":
+                    df[col] = df[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+                elif fmt == "pct2":
+                    df[col] = df[col].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
+                elif fmt == "int":
+                    df[col] = df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
+                elif fmt == "float2":
+                    df[col] = df[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+
+    divider = "─" * 90
+    print(f"\n{divider}")
+    print(f"  {number}. {title}")
+    print(divider)
+    print(df.to_string())
+    print(divider)
+
+print("Setup complete")
