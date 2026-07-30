@@ -1,0 +1,790 @@
+# ============================================================
+# BLOCK 20 of 20: Inventory Planning, Per-Model Forecasts, Campaign Forecast & Final Export
+# ============================================================
+
+# ----- Original Cell #110 -----
+# STEP 12 — INVENTORY PLANNING VALIDATION (Holt-Winters Multiplicative, tested against known outcomes)
+forecast_units = hw_pred_mul.values
+forecast_dates = test['Date'].values
+actual_units = test[TARGET].values
+
+safety_stock = np.ceil(forecast_units * 1.20).astype(int)
+
+inventory_plan = pd.DataFrame({
+    'Month'          : pd.to_datetime(forecast_dates).strftime('%b %Y'),
+    'Forecast_Units' : np.ceil(forecast_units).astype(int),
+    'Actual_Units'   : actual_units.astype(int),
+    'Safety_Stock'   : safety_stock,
+    'Reorder_Point'  : np.ceil(forecast_units * 1.10).astype(int),
+    'Stock_Sufficient': (safety_stock >= actual_units)
+})
+
+pretty(inventory_plan, "Inventory Plan Validation — 12-Month Backtest (Holt-Winters Multiplicative)", 2,
+       format_cols={'Forecast_Units': 'int', 'Actual_Units': 'int', 'Safety_Stock': 'int', 'Reorder_Point': 'int'})
+
+n_sufficient = inventory_plan['Stock_Sufficient'].sum()
+print(f"\nSafety stock would have covered actual demand in {n_sufficient} of {len(inventory_plan)} months")
+print("\nStep 15 Complete — Inventory plan validated against known outcomes")
+
+# ----- Original Cell #111 -----
+# Overfit check: MULTIPLICATIVE Holt-Winters
+hw_train_check_mul = ExponentialSmoothing(train[TARGET], trend='add', seasonal='mul', seasonal_periods=12).fit()
+train_pred_mul = hw_train_check_mul.fittedvalues
+
+train_mae_mul = mean_absolute_error(train[TARGET], train_pred_mul)
+train_mape_mul = calc_mape(train[TARGET].values, train_pred_mul.values)
+
+print(f"TRAIN MAE (multiplicative): {train_mae_mul:.1f}  |  TRAIN MAPE: {train_mape_mul:.2f}%")
+print(f"TEST MAE (multiplicative):  {hw_mae_mul:.1f}  |  TEST MAPE: {mape_hw_mul:.2f}%")
+
+gap_ratio_mul = hw_mae_mul / train_mae_mul
+print(f"\nTest/Train MAE ratio: {gap_ratio_mul:.2f}x")
+
+# ----- Original Cell #112 -----
+# Prep
+fvs_model = fvs.merge(dim_vehicle[['VehicleKey', 'Brand', 'Model']],
+                       on='VehicleKey', how='left')
+
+fvs_model['Date'] = pd.to_datetime(fvs_model['DateKey'].astype(str), format='%Y%m%d')
+fvs_model['YearMonth'] = fvs_model['Date'].dt.to_period('M').dt.to_timestamp()
+
+model_monthly = (fvs_model
+                 .groupby(['YearMonth', 'Model'])['UnitsSold']
+                 .sum()
+                 .reset_index()
+                 .rename(columns={'YearMonth': 'Date'}))
+
+print("Models found:", model_monthly['Model'].nunique())
+print(model_monthly['Model'].unique())
+print("\nSample:")
+print(model_monthly.head(10))
+
+# ----- Original Cell #113 -----
+# STEP 16: 6-MONTH HOLT-WINTERS FORECAST PER CAR MODEL (TOP 20)
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import warnings
+warnings.filterwarnings("ignore")
+
+FUTURE_STEPS = 6
+
+# Build model_monthly fresh if not already in memory (Model x Month unit sales)
+model_monthly = (
+    fvs.merge(dim_date[['DateKey','Date']], on='DateKey', how='left')
+       .merge(dim_vehicle[['VehicleKey','Model']], on='VehicleKey', how='left')
+)
+model_monthly['Date'] = pd.to_datetime(model_monthly['Date'])
+model_monthly = (
+    model_monthly.groupby(['Model', pd.Grouper(key='Date', freq='MS')])['UnitsSold']
+    .sum()
+    .reset_index()
+)
+
+top20_models = (model_monthly.groupby('Model')['UnitsSold']
+                .sum()
+                .sort_values(ascending=False)
+                .head(20)
+                .index.tolist())
+
+model_monthly_clean = model_monthly[model_monthly['Model'].isin(top20_models)].copy()
+
+# Use the FULL actual date range from your data, not a hardcoded 24-month window
+all_dates = pd.date_range(start=monthly['Date'].min(), end=monthly['Date'].max(), freq='MS')
+last_overall_date = monthly['Date'].max()
+future_dates_model = pd.date_range(start=last_overall_date + pd.offsets.MonthBegin(1),
+                                    periods=FUTURE_STEPS, freq='MS')
+
+model_forecasts = {}
+
+for model_name in top20_models:
+    mdf = (model_monthly_clean[model_monthly_clean['Model'] == model_name]
+           .set_index('Date')
+           .reindex(all_dates, fill_value=0)
+           .rename_axis('Date')
+           .reset_index())
+
+    series = mdf.set_index('Date')['UnitsSold'].asfreq('MS').fillna(0)
+
+    # Skip models with too many zero months — Holt-Winters multiplicative can't handle zeros
+    if (series == 0).sum() > len(series) * 0.3 or series.min() <= 0:
+        print(f"  Skipping {model_name}: too many zero/low months for multiplicative seasonality")
+        continue
+
+    try:
+        hw_model_indiv = ExponentialSmoothing(
+            series, trend='add', seasonal='mul', seasonal_periods=12
+        )
+        hw_fit_indiv = hw_model_indiv.fit()
+        fc_mean = hw_fit_indiv.forecast(FUTURE_STEPS).clip(lower=0)
+
+        resid_std_indiv = hw_fit_indiv.resid.std()
+        fc_lower = (fc_mean.values - 1.28 * resid_std_indiv).clip(min=0)
+        fc_upper = fc_mean.values + 1.28 * resid_std_indiv
+
+    except Exception as e:
+        print(f"  Skipping {model_name}: {e}")
+        continue
+
+    model_forecasts[model_name] = {
+        'dates'   : future_dates_model,
+        'forecast': fc_mean.values.round(0).astype(int),
+        'lower'   : fc_lower.round(0).astype(int),
+        'upper'   : fc_upper.round(0).astype(int),
+    }
+
+    fc_df = pd.DataFrame({
+        'Month'           : future_dates_model.strftime('%b %Y'),
+        'Forecasted_Units': fc_mean.values.round(0).astype(int),
+        'Lower_80CI'      : fc_lower.round(0).astype(int),
+        'Upper_80CI'      : fc_upper.round(0).astype(int),
+    })
+    print(f"\n{'=' * 55}")
+    print(f"  MODEL: {model_name}  |  Holt-Winters (Multiplicative)")
+    print(f"{'=' * 55}")
+    print(fc_df.to_string(index=False))
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    recent_mdf = mdf.tail(24)
+    ax.plot(recent_mdf['Date'], recent_mdf['UnitsSold'],
+            color='steelblue', linewidth=2, marker='o', markersize=4, label='Historical (last 24mo)')
+
+    for dt, val in zip(recent_mdf['Date'], recent_mdf['UnitsSold']):
+        ax.annotate(f'{int(val)}', xy=(dt, val), xytext=(0, 8), textcoords='offset points',
+                    ha='center', fontsize=7, color='steelblue')
+
+    last_val = mdf['UnitsSold'].iloc[-1]
+    last_dt  = mdf['Date'].iloc[-1]
+    ax.plot([last_dt] + list(future_dates_model), [last_val] + list(fc_mean.values),
+            color='tomato', linewidth=2.5, linestyle='--', marker='o', markersize=6, label='Forecast')
+
+    for dt, val in zip(future_dates_model, fc_mean.values):
+        ax.annotate(f'{int(round(val))}', xy=(dt, val), xytext=(0, 10), textcoords='offset points',
+                    ha='center', fontsize=8, color='tomato', fontweight='bold')
+
+    ax.fill_between(future_dates_model, fc_lower, fc_upper, color='tomato', alpha=0.15, label='~80% CI')
+    ax.axvline(x=last_dt, color='gray', linestyle=':', linewidth=1.5)
+
+    ax.set_title(f'Inventory Forecast — {model_name}  |  Holt-Winters (Multiplicative)',
+                 fontsize=12, fontweight='bold')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Units Sold')
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.legend(fontsize=9, frameon=False)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(f'forecast_{model_name.replace(" ", "_")}.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+# Summary table
+print(f"\n{'=' * 75}")
+print("  SUMMARY — 6-MONTH FORECAST (UNITS) BY CAR MODEL (TOP 20)")
+print(f"{'=' * 75}")
+
+summary_rows = []
+for model_name, res in model_forecasts.items():
+    row = {'Model': model_name}
+    for dt, val in zip(res['dates'], res['forecast']):
+        row[dt.strftime('%b %Y')] = val
+    row['Total (6M)'] = sum(res['forecast'])
+    summary_rows.append(row)
+
+summary_df = pd.DataFrame(summary_rows).set_index('Model')
+print(summary_df.to_string())
+print(f"\nStep 16 Complete — Holt-Winters forecasts done for {len(model_forecasts)} of {len(top20_models)} models")
+
+# ----- Original Cell #114 -----
+# STEP 16b: 12-MONTH HOLT-WINTERS FORECAST PER CAR MODEL (TOP 20)
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import warnings
+warnings.filterwarnings("ignore")
+
+FUTURE_STEPS = 12
+
+def freeze_on_consecutive_decline(values):
+    """
+    If a forecast declines 2+ consecutive times, freeze subsequent values
+    at the level of the FIRST decline in that streak, until the trend
+    reverses (goes back up).
+    Example: [8, 6, 3, 2, 5] -> [8, 6, 6, 6, 5]
+    (Feb=6 is the first decline; Mar/Apr get frozen to 6 since they keep
+    declining; May rises again so it's left as-is.)
+    """
+    values = list(values)
+    result = values.copy()
+    decline_streak = 0
+    freeze_value = None
+
+    for i in range(1, len(values)):
+        if result[i] < result[i-1]:
+            decline_streak += 1
+            if decline_streak == 1:
+                freeze_value = result[i]
+            elif decline_streak >= 2:
+                result[i] = freeze_value
+        else:
+            decline_streak = 0
+            freeze_value = None
+
+    return np.array(result)
+
+model_monthly = (
+    fvs.merge(dim_date[['DateKey','Date']], on='DateKey', how='left')
+       .merge(dim_vehicle[['VehicleKey','Model']], on='VehicleKey', how='left')
+)
+model_monthly['Date'] = pd.to_datetime(model_monthly['Date'])
+model_monthly = (
+    model_monthly.groupby(['Model', pd.Grouper(key='Date', freq='MS')])['UnitsSold']
+    .sum()
+    .reset_index()
+)
+
+top20_models = (model_monthly.groupby('Model')['UnitsSold']
+                .sum()
+                .sort_values(ascending=False)
+                .head(20)
+                .index.tolist())
+
+model_monthly_clean = model_monthly[model_monthly['Model'].isin(top20_models)].copy()
+
+all_dates = pd.date_range(start=monthly['Date'].min(), end=monthly['Date'].max(), freq='MS')
+last_overall_date = monthly['Date'].max()
+future_dates_model = pd.date_range(start=last_overall_date + pd.offsets.MonthBegin(1),
+                                    periods=FUTURE_STEPS, freq='MS')
+
+model_forecasts = {}
+
+for model_name in top20_models:
+    mdf = (model_monthly_clean[model_monthly_clean['Model'] == model_name]
+           .set_index('Date')
+           .reindex(all_dates, fill_value=0)
+           .rename_axis('Date')
+           .reset_index())
+
+    series = mdf.set_index('Date')['UnitsSold'].asfreq('MS').fillna(0)
+
+    if (series == 0).sum() > len(series) * 0.3 or series.min() <= 0:
+        print(f"  Skipping {model_name}: too many zero/low months for multiplicative seasonality")
+        continue
+
+    try:
+        hw_model_indiv = ExponentialSmoothing(
+            series, trend='add', seasonal='mul', seasonal_periods=12
+        )
+        hw_fit_indiv = hw_model_indiv.fit()
+        fc_mean_raw = hw_fit_indiv.forecast(FUTURE_STEPS).clip(lower=0)
+
+        fc_mean_adjusted = freeze_on_consecutive_decline(fc_mean_raw.values)
+
+        resid_std_indiv = hw_fit_indiv.resid.std()
+        fc_lower = (fc_mean_adjusted - 1.28 * resid_std_indiv).clip(min=0)
+        fc_upper = fc_mean_adjusted + 1.28 * resid_std_indiv
+
+    except Exception as e:
+        print(f"  Skipping {model_name}: {e}")
+        continue
+
+    model_forecasts[model_name] = {
+        'dates'   : future_dates_model,
+        'forecast': fc_mean_adjusted.round(0).astype(int),
+        'lower'   : fc_lower.round(0).astype(int),
+        'upper'   : fc_upper.round(0).astype(int),
+    }
+
+    fc_df = pd.DataFrame({
+        'Month'           : future_dates_model.strftime('%b %Y'),
+        'Forecasted_Units': fc_mean_adjusted.round(0).astype(int),
+        'Lower_80CI'      : fc_lower.round(0).astype(int),
+        'Upper_80CI'      : fc_upper.round(0).astype(int),
+    })
+    print(f"\n{'=' * 55}")
+    print(f"  MODEL: {model_name}  |  Holt-Winters (Multiplicative)")
+    print(f"{'=' * 55}")
+    print(fc_df.to_string(index=False))
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    recent_mdf = mdf.tail(24)
+    ax.plot(recent_mdf['Date'], recent_mdf['UnitsSold'],
+            color='steelblue', linewidth=2, marker='o', markersize=4, label='Historical (last 24mo)')
+
+    for dt, val in zip(recent_mdf['Date'], recent_mdf['UnitsSold']):
+        ax.annotate(f'{int(val)}', xy=(dt, val), xytext=(0, 8), textcoords='offset points',
+                    ha='center', fontsize=7, color='steelblue')
+
+    last_val = mdf['UnitsSold'].iloc[-1]
+    last_dt  = mdf['Date'].iloc[-1]
+    ax.plot([last_dt] + list(future_dates_model), [last_val] + list(fc_mean_adjusted),
+            color='tomato', linewidth=2.5, linestyle='--', marker='o', markersize=6, label='Forecast (smoothed)')
+
+    for dt, val in zip(future_dates_model, fc_mean_adjusted):
+        ax.annotate(f'{int(round(val))}', xy=(dt, val), xytext=(0, 10), textcoords='offset points',
+                    ha='center', fontsize=8, color='tomato', fontweight='bold')
+
+    ax.fill_between(future_dates_model, fc_lower, fc_upper, color='tomato', alpha=0.15, label='~80% CI')
+    ax.axvline(x=last_dt, color='gray', linestyle=':', linewidth=1.5)
+
+    ax.set_title(f'Inventory Forecast — {model_name}  |  Holt-Winters (Multiplicative)',
+                 fontsize=12, fontweight='bold')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Units Sold')
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.legend(fontsize=9, frameon=False)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(f'forecast_{model_name.replace(" ", "_")}.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+# Summary table
+print(f"\n{'=' * 75}")
+print("  SUMMARY — 12-MONTH FORECAST (UNITS) BY CAR MODEL (TOP 20)")
+print(f"{'=' * 75}")
+
+summary_rows = []
+for model_name, res in model_forecasts.items():
+    row = {'Model': model_name}
+    for dt, val in zip(res['dates'], res['forecast']):
+        row[dt.strftime('%b %Y')] = val
+    row['Total (12M)'] = sum(res['forecast'])
+    summary_rows.append(row)
+
+summary_df = pd.DataFrame(summary_rows).set_index('Model')
+print(summary_df.to_string())
+print(f"\nStep 16 Complete — Holt-Winters forecasts done")
+
+# ----- Original Cell #115 -----
+# STEP 17 — 5-MONTH HOLT-WINTERS FORECAST FOR ALL 154 MODELS
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import warnings
+warnings.filterwarnings("ignore")
+
+FUTURE_STEPS = 5
+future_dates  = pd.date_range(start='2024-01-01', periods=FUTURE_STEPS, freq='MS')
+all_dates     = pd.date_range(start='2022-01-01', periods=24, freq='MS')
+
+all_models = [m for m in model_monthly['Model'].unique() if isinstance(m, str)]
+print(f"Total models to forecast: {len(all_models)}")
+
+all_forecasts = {}
+skipped       = []
+
+for i, model_name in enumerate(all_models, 1):
+    mdf = (model_monthly[model_monthly['Model'] == model_name]
+           .set_index('Date')
+           .reindex(all_dates, fill_value=0)
+           .rename_axis('Date')
+           .reset_index())
+
+    series = mdf.set_index('Date')['UnitsSold'].asfreq('MS').fillna(0)
+
+    try:
+        # Multiplicative seasonality needs strictly positive values —
+        # add a small offset, forecast, then subtract it back out.
+        offset = 1e-3
+        series_pos = series + offset
+
+        mod = ExponentialSmoothing(
+            series_pos,
+            trend='add',
+            seasonal='mul',
+            seasonal_periods=12,
+            initialization_method='estimated'
+        )
+        fit     = mod.fit(optimized=True)
+        fc_mean = fit.forecast(FUTURE_STEPS) - offset
+        fc_mean = fc_mean.clip(lower=0)
+
+        all_forecasts[model_name] = {
+            'dates'   : future_dates,
+            'forecast': fc_mean.values.round(0).astype(int),
+        }
+
+        if i % 20 == 0:
+            print(f"  ✔ {i}/{len(all_models)} models done...")
+
+    except Exception as e:
+        skipped.append(model_name)
+        continue
+
+print(f"\nDone — {len(all_forecasts)} models forecasted, {len(skipped)} skipped")
+if skipped:
+    print(f"Skipped: {skipped}")
+
+rows = []
+for model_name, res in all_forecasts.items():
+    row = {'Car Model': model_name}
+    for dt, val in zip(res['dates'], res['forecast']):
+        row[dt.strftime('%b %Y')] = val
+    row['Total (5M)'] = sum(res['forecast'])
+    rows.append(row)
+
+all_models_df = (pd.DataFrame(rows)
+                 .set_index('Car Model')
+                 .sort_values('Total (5M)', ascending=False))
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows',    None)
+pd.set_option('display.width',       200)
+
+print("\n" + "=" * 75)
+print("  INVENTORY FORECAST — ALL CAR MODELS (Sorted by Total Units)")
+print("=" * 75)
+print(all_models_df.to_string())
+print("=" * 75)
+print(f"\nGrand Total across all models: {all_models_df['Total (5M)'].sum():,} units")
+
+# ----- Original Cell #116 -----
+# STEP 18: 6-MONTH FORECAST BY CAMPAIGN TYPE
+# Build camp_monthly: monthly unit sales by CampaignType
+camp_monthly = (
+    fvs.merge(dim_date[['DateKey','Date']], on='DateKey', how='left')
+       .merge(dim_campaign[['CampaignKey','CampaignType']], on='CampaignKey', how='left')
+)
+camp_monthly['Date'] = pd.to_datetime(camp_monthly['Date'])
+camp_monthly = (
+    camp_monthly.groupby(['CampaignType', pd.Grouper(key='Date', freq='MS')])['UnitsSold']
+    .sum()
+    .reset_index()
+)
+
+print(f"camp_monthly built: {len(camp_monthly)} rows")
+print(f"Campaign types: {camp_monthly['CampaignType'].unique().tolist()}")
+print(f"Date range: {camp_monthly['Date'].min()} to {camp_monthly['Date'].max()}")
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import numpy as np
+
+FUTURE_STEPS = 6
+DISPLAY_MONTHS = 24
+
+all_dates = pd.date_range(
+    start=camp_monthly['Date'].min(),
+    end=camp_monthly['Date'].max(),
+    freq='MS'
+)
+future_dates = pd.date_range(
+    start=all_dates[-1] + pd.DateOffset(months=1),
+    periods=FUTURE_STEPS,
+    freq='MS'
+)
+
+print(f"Historical window (fit): {all_dates[0].strftime('%b %Y')} to {all_dates[-1].strftime('%b %Y')} "
+      f"({len(all_dates)} months, {len(all_dates)/12:.1f} seasonal cycles)")
+print(f"Forecast window:         {future_dates[0].strftime('%b %Y')} to {future_dates[-1].strftime('%b %Y')}")
+
+campaign_types = camp_monthly['CampaignType'].unique().tolist()
+
+camp_forecasts_6m = {}
+N_SIMS = 1000
+offset = 1e-3
+
+for camp_type in campaign_types:
+    cdf = (camp_monthly[camp_monthly['CampaignType'] == camp_type]
+           .set_index('Date')[['UnitsSold']]
+           .reindex(all_dates, fill_value=0)
+           .rename_axis('Date'))
+
+    series = cdf['UnitsSold'].asfreq('MS').fillna(0)
+    series_pos = series + offset
+
+    try:
+        mod = ExponentialSmoothing(
+            series_pos,
+            trend='add',
+            seasonal='mul',
+            seasonal_periods=12,
+            initialization_method='estimated'
+        )
+        fit     = mod.fit(optimized=True)
+        fc_mean = (fit.forecast(FUTURE_STEPS) - offset).clip(lower=0)
+
+        sims = fit.simulate(nsimulations=FUTURE_STEPS, repetitions=N_SIMS,
+                             error='mul', random_errors='bootstrap') - offset
+        sims = sims.clip(lower=0)
+        lower = sims.quantile(0.10, axis=1)
+        upper = sims.quantile(0.90, axis=1)
+
+        camp_forecasts_6m[camp_type] = {
+            'series'  : series,
+            'forecast': fc_mean.values.round(0).astype(int),
+            'lower'   : lower.values.round(0).astype(int),
+            'upper'   : upper.values.round(0).astype(int),
+        }
+
+    except Exception as e:
+        print(f"  ⚠ Skipping {camp_type}: {e}")
+        continue
+
+    fc_df = pd.DataFrame({
+        'Month'           : future_dates.strftime('%b %Y'),
+        'Forecasted_Units': camp_forecasts_6m[camp_type]['forecast'],
+        'Lower_80CI'      : camp_forecasts_6m[camp_type]['lower'],
+        'Upper_80CI'      : camp_forecasts_6m[camp_type]['upper'],
+    })
+    print(f"\n{'=' * 55}")
+    print(f"  CAMPAIGN TYPE: {camp_type}")
+    print(f"{'=' * 55}")
+    print(fc_df.to_string(index=False))
+
+    disp_dates = all_dates[-DISPLAY_MONTHS:]
+    disp_vals  = series.values[-DISPLAY_MONTHS:]
+
+    fig, ax = plt.subplots(figsize=(13, 4))
+
+    ax.plot(disp_dates, disp_vals,
+            color='steelblue', linewidth=2,
+            marker='o', markersize=4, label=f'Historical (last {DISPLAY_MONTHS}mo)')
+
+    for dt, val in zip(disp_dates, disp_vals):
+        ax.annotate(f'{int(val)}',
+                    xy=(dt, val), xytext=(0, 10),
+                    textcoords='offset points',
+                    ha='center', fontsize=7,
+                    color='steelblue',
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.75))
+
+    last_val = disp_vals[-1]
+    last_dt  = disp_dates[-1]
+    ax.plot(
+        [last_dt] + list(future_dates),
+        [last_val] + list(camp_forecasts_6m[camp_type]['forecast']),
+        color='tomato', linewidth=2.5, linestyle='--',
+        marker='o', markersize=5, label='Forecast (smoothed)'
+    )
+
+    ax.fill_between(future_dates,
+                    camp_forecasts_6m[camp_type]['lower'],
+                    camp_forecasts_6m[camp_type]['upper'],
+                    color='tomato', alpha=0.15, label='~80% CI')
+
+    ax.axvline(x=last_dt, color='gray', linestyle=':', linewidth=1.5)
+
+    for dt, val in zip(future_dates, camp_forecasts_6m[camp_type]['forecast']):
+        ax.annotate(f'{int(val)}',
+                    xy=(dt, val), xytext=(0, 10),
+                    textcoords='offset points',
+                    ha='center', fontsize=8,
+                    color='tomato', fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.75))
+
+    ax.set_title(f'6-Month Forecast — {camp_type}  |  Holt-Winters (Multiplicative)',
+                 fontsize=12, fontweight='bold')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Units Sold')
+    ax.legend(fontsize=9, loc='upper left')
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(f'forecast_6m_campaign_{camp_type.replace(" ", "_")}.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+print(f"\n{'=' * 85}")
+print("  6-MONTH FORECAST SUMMARY — UNITS SOLD BY CAMPAIGN TYPE")
+print(f"{'=' * 85}")
+
+summary_rows_6m = []
+for camp_type, res in camp_forecasts_6m.items():
+    row = {'Campaign Type': camp_type}
+    for dt, val in zip(future_dates, res['forecast']):
+        row[dt.strftime('%b %Y')] = val
+    row['Total 6M'] = sum(res['forecast'])
+    summary_rows_6m.append(row)
+
+summary_df_6m = (pd.DataFrame(summary_rows_6m)
+              .set_index('Campaign Type')
+              .sort_values('Total 6M', ascending=False))
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 200)
+print(summary_df_6m.to_string())
+print(f"\nGrand Total (6M): {summary_df_6m['Total 6M'].sum():,} units")
+print(f"\nStep 18 Complete — 6-month campaign forecast done for {len(camp_forecasts_6m)} campaign types")
+
+# ----- Original Cell #117 -----
+# STEP 18b: 2026 FULL YEAR FORECAST BY CAMPAIGN TYPE
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import numpy as np
+
+FUTURE_STEPS = 12
+DISPLAY_MONTHS = 24
+
+all_dates = pd.date_range(
+    start=camp_monthly['Date'].min(),
+    end=camp_monthly['Date'].max(),
+    freq='MS'
+)
+future_dates = pd.date_range(
+    start=all_dates[-1] + pd.DateOffset(months=1),
+    periods=FUTURE_STEPS,
+    freq='MS'
+)
+
+print(f"Historical window (fit): {all_dates[0].strftime('%b %Y')} to {all_dates[-1].strftime('%b %Y')} "
+      f"({len(all_dates)} months, {len(all_dates)/12:.1f} seasonal cycles)")
+print(f"Forecast window:         {future_dates[0].strftime('%b %Y')} to {future_dates[-1].strftime('%b %Y')}")
+
+campaign_types = camp_monthly['CampaignType'].unique().tolist()
+
+camp_forecasts = {}
+N_SIMS = 1000
+offset = 1e-3
+
+for camp_type in campaign_types:
+    cdf = (camp_monthly[camp_monthly['CampaignType'] == camp_type]
+           .set_index('Date')[['UnitsSold']]
+           .reindex(all_dates, fill_value=0)
+           .rename_axis('Date'))
+
+    series = cdf['UnitsSold'].asfreq('MS').fillna(0)
+    series_pos = series + offset
+
+    try:
+        mod = ExponentialSmoothing(
+            series_pos,
+            trend='add',
+            seasonal='mul',
+            seasonal_periods=12,
+            initialization_method='estimated'
+        )
+        fit     = mod.fit(optimized=True)
+        fc_mean = (fit.forecast(FUTURE_STEPS) - offset).clip(lower=0)
+
+        sims = fit.simulate(nsimulations=FUTURE_STEPS, repetitions=N_SIMS,
+                             error='mul', random_errors='bootstrap') - offset
+        sims = sims.clip(lower=0)
+        lower = sims.quantile(0.10, axis=1)
+        upper = sims.quantile(0.90, axis=1)
+
+        camp_forecasts[camp_type] = {
+            'series'  : series,
+            'forecast': fc_mean.values.round(0).astype(int),
+            'lower'   : lower.values.round(0).astype(int),
+            'upper'   : upper.values.round(0).astype(int),
+        }
+
+    except Exception as e:
+        print(f"  ⚠ Skipping {camp_type}: {e}")
+        continue
+
+    fc_df = pd.DataFrame({
+        'Month'           : future_dates.strftime('%b %Y'),
+        'Forecasted_Units': camp_forecasts[camp_type]['forecast'],
+        'Lower_80CI'      : camp_forecasts[camp_type]['lower'],
+        'Upper_80CI'      : camp_forecasts[camp_type]['upper'],
+    })
+    print(f"\n{'=' * 55}")
+    print(f"  CAMPAIGN TYPE: {camp_type}")
+    print(f"{'=' * 55}")
+    print(fc_df.to_string(index=False))
+
+    disp_dates = all_dates[-DISPLAY_MONTHS:]
+    disp_vals  = series.values[-DISPLAY_MONTHS:]
+
+    fig, ax = plt.subplots(figsize=(13, 4))
+
+    ax.plot(disp_dates, disp_vals,
+            color='steelblue', linewidth=2,
+            marker='o', markersize=4, label=f'Historical (last {DISPLAY_MONTHS}mo)')
+
+    for dt, val in zip(disp_dates, disp_vals):
+        ax.annotate(f'{int(val)}',
+                    xy=(dt, val), xytext=(0, 10),
+                    textcoords='offset points',
+                    ha='center', fontsize=7,
+                    color='steelblue',
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.75))
+
+    last_val = disp_vals[-1]
+    last_dt  = disp_dates[-1]
+    ax.plot(
+        [last_dt] + list(future_dates),
+        [last_val] + list(camp_forecasts[camp_type]['forecast']),
+        color='tomato', linewidth=2.5, linestyle='--',
+        marker='o', markersize=5, label='Forecast (smoothed)'
+    )
+
+    ax.fill_between(future_dates,
+                    camp_forecasts[camp_type]['lower'],
+                    camp_forecasts[camp_type]['upper'],
+                    color='tomato', alpha=0.15, label='~80% CI')
+
+    ax.axvline(x=last_dt, color='gray', linestyle=':', linewidth=1.5)
+
+    for dt, val in zip(future_dates, camp_forecasts[camp_type]['forecast']):
+        ax.annotate(f'{int(val)}',
+                    xy=(dt, val), xytext=(0, 10),
+                    textcoords='offset points',
+                    ha='center', fontsize=8,
+                    color='tomato', fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.75))
+
+    ax.set_title(f'Inventory Forecast — {camp_type}  |  Holt-Winters (Multiplicative)',
+                 fontsize=12, fontweight='bold')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Units Sold')
+    ax.legend(fontsize=9, loc='upper left')
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(f'forecast_campaign_{camp_type.replace(" ", "_")}.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+print(f"\n{'=' * 85}")
+print("  2026 FORECAST SUMMARY — UNITS SOLD BY CAMPAIGN TYPE")
+print(f"{'=' * 85}")
+
+summary_rows = []
+for camp_type, res in camp_forecasts.items():
+    row = {'Campaign Type': camp_type}
+    for dt, val in zip(future_dates, res['forecast']):
+        row[dt.strftime('%b %Y')] = val
+    row['Total 2026'] = sum(res['forecast'])
+    summary_rows.append(row)
+
+summary_df = (pd.DataFrame(summary_rows)
+              .set_index('Campaign Type')
+              .sort_values('Total 2026', ascending=False))
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 200)
+print(summary_df.to_string())
+print(f"\nGrand Total 2026: {summary_df['Total 2026'].sum():,} units")
+print(f"\nStep 18 Complete — 2026 campaign forecast done for {len(camp_forecasts)} campaign types")
+
+# ----- Original Cell #118 -----
+import pandas as pd
+
+DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+
+all_sheets = pd.read_excel(DRIVE_FILE, sheet_name=None)
+fvs_final = all_sheets["Fact_VehicleSales"]
+dim_date_final = all_sheets["Dim_Date"]
+
+print(f"Fact_VehicleSales: {len(fvs_final):,} rows")
+print(f"Dim_Date: {len(dim_date_final):,} rows, range {dim_date_final['Date'].min()} -> {dim_date_final['Date'].max()}")
+yearly_sales = fvs_final.merge(dim_date_final[["DateKey","Date"]], on="DateKey", how="left")
+yearly_sales["Date"] = pd.to_datetime(yearly_sales["Date"])
+yearly_sales["Year"] = yearly_sales["Date"].dt.year
+
+yearly_totals = yearly_sales.groupby("Year").size()
+print(yearly_totals)
+
+yoy_change = yearly_totals.pct_change() * 100
+print("\nYear-over-year % change:")
+print(yoy_change.round(1))
+
+print(f"\nYears where sales DECREASED vs previous year: {(yoy_change < 0).sum()} of {len(yoy_change)-1}")
