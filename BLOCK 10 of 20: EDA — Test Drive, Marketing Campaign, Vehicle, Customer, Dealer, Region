@@ -1,0 +1,536 @@
+# ============================================================
+# BLOCK 10 of 20: EDA — Test Drive, Marketing Campaign, Vehicle, Customer, Dealer, Region
+# ============================================================
+
+# ----- Original Cell #18 -----
+# 5. Fact_TestDrive: Outcome Distribution
+print("EDA: FACT_TESTDRIVE")
+
+print(f"\nShape: {ftd.shape[0]:,} rows × {ftd.shape[1]} columns")
+print(f"Duplicates: {ftd.duplicated().sum()}")
+
+missing = ftd.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(ftd) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print("\nMissing Values:")
+display(missing_df)
+
+outcome   = ftd["Outcome"].value_counts(dropna=False)
+conv_rate = (ftd["Outcome"] == "Converted").sum() / ftd["Outcome"].notna().sum() * 100
+print("\nOutcome Distribution:")
+display(outcome)
+print(f"\n  Conversion Rate (excl. nulls): {conv_rate:.1f}%")
+
+# Chart
+labels = [str(l) for l in outcome.index]
+values = list(outcome.values)
+
+colors = ["#2E4A6E", "#E63946", "#70AD47"][:len(labels)]
+
+fig, ax = plt.subplots(figsize=(10, 5))
+
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(
+    range(len(labels)),
+    values,
+    color=colors,
+    width=0.5,
+    zorder=2
+)
+
+for bar, val in zip(bars, values):
+    ax.text(
+        bar.get_x() + bar.get_width() / 2,
+        bar.get_height() + max(values) * 0.02,
+        f"{val:,}\n({val/len(ftd)*100:.1f}%)",
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        fontweight="bold",
+        color="black"
+    )
+
+ax.plot(
+    range(len(values)),
+    values,
+    color="#F4C542",
+    marker="o",
+    linewidth=2.5,
+    markersize=8,
+    zorder=3,
+    label="Trend"
+)
+
+ax.set_title(
+    "Fact_TestDrive — Outcome Distribution",
+    fontsize=14,
+    fontweight="bold",
+    color="black",
+    pad=15
+)
+
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels, fontsize=11, color="black")
+ax.set_xlabel("Outcome", fontsize=11, color="black", labelpad=10)
+
+ax.set_ylabel("Count", fontsize=11, color="black")
+
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+
+ax.spines["left"].set_visible(True)
+ax.spines["bottom"].set_visible(True)
+
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+
+ax.tick_params(axis="both", colors="black")
+
+ax.margins(y=0.3)
+
+ax.legend(facecolor="white", edgecolor="black")
+
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #19 -----
+# 6. Fact_MarketingCampaign: Funnel
+print("EDA: FACT_MARKETINGCAMPAIGN")
+
+print(f"\nShape: {fmc.shape[0]:,} rows × {fmc.shape[1]} columns")
+print(f"Duplicates: {fmc.duplicated().sum()}")
+
+missing = fmc.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(fmc) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print("\nMissing Values:")
+display(missing_df)
+
+print("\nDescriptive Statistics:")
+display(fmc[["Impressions","Leads","TestDrives","Bookings",
+             "CampaignCost","RevenueGenerated"]].describe().round(2))
+
+fmc_clean      = fmc.dropna(subset=["CampaignCost","RevenueGenerated"])
+fmc_clean      = fmc_clean[fmc_clean["CampaignCost"] > 0].copy()
+fmc_clean["ROI%"] = ((fmc_clean["RevenueGenerated"] - fmc_clean["CampaignCost"]) /
+                      fmc_clean["CampaignCost"] * 100).round(1)
+print(f"\nROI Stats:")
+print(f"  Min: {fmc_clean['ROI%'].min():.1f}%  "
+      f"Max: {fmc_clean['ROI%'].max():.1f}%  "
+      f"Avg: {fmc_clean['ROI%'].mean():.1f}%")
+
+# Chart
+funnel_labels = ["Impressions","Leads","TestDrives","Bookings"]
+funnel_values = [int(fmc["Impressions"].sum()), int(fmc["Leads"].sum()),
+                 int(fmc["TestDrives"].sum()), int(fmc["Bookings"].sum())]
+colors = ["#1F3864","#2E4A6E","#3A7CA5","#5BA4CF"]
+
+fig, ax = plt.subplots(figsize=(12, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(range(len(funnel_labels)), funnel_values,
+              color=colors, width=0.5, zorder=2)
+for bar, val in zip(bars, funnel_values):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() * 1.15,
+            f"{val:,}", ha="center", va="bottom",
+            fontsize=10, fontweight="bold", color="#1E2A3A")
+
+ax.plot(range(len(funnel_values)), funnel_values, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=8, zorder=3, label="Trend")
+
+ax.set_yscale("log")
+ax.set_ylabel("Count (Log Scale)", color="#1E2A3A", fontsize=11)
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(
+    lambda x, _: f"{int(x):,}" if x >= 1 else ""))
+
+ax.set_title("Fact_MarketingCampaign — Marketing Funnel",
+             fontsize=14, fontweight="bold", color="#1E2A3A", pad=15)
+ax.set_xticks(range(len(funnel_labels)))
+ax.set_xticklabels(funnel_labels, color="#1E2A3A", fontsize=11)
+ax.set_xlabel("Funnel Stage", color="#1E2A3A", fontsize=11)
+
+ax.tick_params(axis="x", colors="#1E2A3A")
+ax.tick_params(axis="y", colors="#1E2A3A")
+ax.spines["bottom"].set_visible(True)
+ax.spines["bottom"].set_color("#1E2A3A")
+ax.spines["left"].set_visible(True)
+ax.spines["left"].set_color("#1E2A3A")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.legend(facecolor="white", labelcolor="#1E2A3A", fontsize=10)
+
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #20 -----
+# 7. Dim_Vehicle: FuelType Distribution
+print("EDA: DIM_VEHICLE")
+
+print(f"\nShape: {dim_vehicle.shape[0]:,} rows × {dim_vehicle.shape[1]} columns")
+print(f"Duplicates: {dim_vehicle.duplicated().sum()}")
+
+missing = dim_vehicle.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(dim_vehicle) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print("\nMissing Values:")
+display(missing_df)
+
+print("\nPrice Statistics:")
+display(dim_vehicle["Price"].describe().round(2))
+print(f"  Prices below $5,000:   {(dim_vehicle['Price'] < 5000).sum()} vehicles")
+print(f"  Prices above $100,000: {(dim_vehicle['Price'] > 100000).sum()} vehicles")
+
+print("\nFuelType Distribution:")
+display(dim_vehicle["FuelType"].value_counts(dropna=False))
+print("\nBodyType Distribution:")
+display(dim_vehicle["BodyType"].value_counts(dropna=False))
+print("\nTop 10 Brands:")
+display(dim_vehicle["Brand"].value_counts().head(10))
+
+# Chart
+fuel   = dim_vehicle["FuelType"].value_counts(dropna=False)
+labels = [str(l) for l in fuel.index]
+values = list(fuel.values)
+colors = ["#2E4A6E","#3A7CA5","#E63946","#70AD47","#F4C542"][:len(labels)]
+
+fig, ax = plt.subplots(figsize=(10, 5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(range(len(labels)), values, color=colors, width=0.5, zorder=2)
+
+for bar, val in zip(bars, values):
+    ax.text(
+        bar.get_x() + bar.get_width()/2,
+        bar.get_height() + max(values)*0.02,
+        f"{val}\n({val/len(dim_vehicle)*100:.1f}%)",
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        fontweight="bold",
+        color="black"
+    )
+
+ax.plot(
+    range(len(values)),
+    values,
+    color="#F4C542",
+    marker="o",
+    linewidth=2.5,
+    markersize=8,
+    zorder=3,
+    label="Trend"
+)
+
+ax.set_title(
+    "Dim_Vehicle — FuelType Distribution",
+    fontsize=14,
+    fontweight="bold",
+    color="black",
+    pad=15
+)
+
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels, fontsize=11, color="black")
+
+ax.set_ylabel("Count", fontsize=11, color="black")
+
+for spine in ["top", "right"]:
+    ax.spines[spine].set_visible(False)
+
+ax.spines["left"].set_visible(True)
+ax.spines["bottom"].set_visible(True)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+
+ax.tick_params(axis="both", colors="black")
+
+ax.margins(y=0.2)
+
+ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #21 -----
+# 8. Dim_Customer: Age Group Distribution
+print("EDA: DIM_CUSTOMER")
+
+print(f"\nShape: {dim_customer.shape[0]:,} rows × {dim_customer.shape[1]} columns")
+print(f"Duplicates: {dim_customer.duplicated().sum()}")
+
+missing = dim_customer.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(dim_customer) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print("\nMissing Values:")
+display(missing_df)
+
+valid_ages    = ["Under 25","25-34","35-44","45-54","55-64","65+"]
+valid_genders = ["Male","Female"]
+invalid_age    = dim_customer[~dim_customer["AgeGroup"].isin(valid_ages) &
+                               dim_customer["AgeGroup"].notna()]
+invalid_gender = dim_customer[~dim_customer["Gender"].isin(valid_genders) &
+                               dim_customer["Gender"].notna()]
+print(f"\nInvalid Values:")
+print(f"  Invalid AgeGroup: {len(invalid_age)} rows")
+print(f"  Invalid Gender:   {len(invalid_gender)} rows")
+
+print("\nAgeGroup Distribution:")
+display(dim_customer["AgeGroup"].value_counts(dropna=False))
+print("\nIncomeGroup Distribution:")
+display(dim_customer["IncomeGroup"].value_counts(dropna=False))
+print("\nGender Distribution:")
+display(dim_customer["Gender"].value_counts(dropna=False))
+
+# Chart
+import matplotlib.pyplot as plt
+
+age_order = ["Under 25","25-34","35-44","45-54","55-64","65+"]
+age_clean = dim_customer[dim_customer["AgeGroup"].isin(age_order)]
+
+age    = age_clean["AgeGroup"].value_counts().reindex(age_order)
+labels = list(age.index)
+values = list(age.values)
+
+fig, ax = plt.subplots(figsize=(12, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(
+    range(len(labels)),
+    values,
+    color="#2E4A6E",
+    width=0.6,
+    zorder=2
+)
+
+for bar, val in zip(bars, values):
+    ax.text(
+        bar.get_x() + bar.get_width()/2,
+        bar.get_height() + max(values)*0.02,
+        f"{val:,}\n({val/len(dim_customer)*100:.1f}%)",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+        color="black"
+    )
+ax.plot(
+    range(len(values)),
+    values,
+    color="#F4C542",
+    marker="o",
+    linewidth=2.5,
+    markersize=8,
+    zorder=3,
+    label="Trend"
+)
+ax.set_title(
+    "Dim_Customer — Age Group Distribution",
+    fontsize=16,
+    fontweight="bold",
+    color="black",
+    pad=20
+)
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(
+    labels,
+    fontsize=11,
+    color="black"
+)
+ax.set_xlabel(
+    "Age Group",
+    fontsize=12,
+    fontweight="bold",
+    color="black",
+    labelpad=10
+)
+
+ax.set_ylabel(
+    "Count",
+    fontsize=12,
+    fontweight="bold",
+    color="black",
+    labelpad=10
+)
+
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+
+ax.spines["left"].set_linewidth(1.2)
+ax.spines["bottom"].set_linewidth(1.2)
+
+ax.tick_params(axis='x', colors='black')
+ax.tick_params(axis='y', colors='black')
+
+ax.grid(
+    axis='y',
+    linestyle='--',
+    alpha=0.3,
+    zorder=1
+)
+
+ax.legend(
+    facecolor="white",
+    edgecolor="black"
+)
+
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #22 -----
+# 9. Dim_Dealer: Dealer Type Distribution
+print("EDA: DIM_DEALER")
+
+print(f"\nDim_Dealer — Shape: {dim_dealer.shape}")
+print(f"  Duplicates: {dim_dealer.duplicated().sum()}")
+
+missing = dim_dealer.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(dim_dealer) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print(f"\n  Missing Values:")
+display(missing_df)
+
+print(f"\n  DealerType Distribution:")
+display(dim_dealer["DealerType"].value_counts(dropna=False))
+
+print(f"\n  Dealers per State:")
+display(dim_dealer["State"].value_counts(dropna=False))
+
+print(f"\n  Dealers per City:")
+display(dim_dealer["City"].value_counts(dropna=False))
+
+# Chart
+dtype  = dim_dealer["DealerType"].value_counts(dropna=False)
+labels = [str(l) for l in dtype.index]
+values = list(dtype.values)
+colors = ["#2E4A6E","#3A6B9E","#E63946"][:len(labels)]
+
+fig, ax = plt.subplots(figsize=(10, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(range(len(labels)), values, color=colors, width=0.5, zorder=2)
+for bar, val in zip(bars, values):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + max(values)*0.02,
+            f"{val}\n({val/len(dim_dealer)*100:.1f}%)",
+            ha="center", va="bottom",
+            fontsize=11, fontweight="bold", color="black")
+
+ax.plot(range(len(values)), values, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=8, zorder=3, label="Trend")
+
+ax.set_title("Dim_Dealer — Dealer Type Distribution",
+             fontsize=16, fontweight="bold", color="black", pad=20)
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels, fontsize=11, color="black")
+ax.set_ylabel("Count", fontsize=12, fontweight="bold", color="black")
+ax.set_xlabel("Dealer Type", fontsize=12, fontweight="bold", color="black")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.spines["left"].set_linewidth(1.2)
+ax.spines["bottom"].set_linewidth(1.2)
+ax.tick_params(axis='x', colors='black')
+ax.tick_params(axis='y', colors='black')
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=1)
+ax.legend(facecolor="white", edgecolor="black")
+ax.margins(y=0.3)
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #23 -----
+# 10. Dim_Region: Zone Distribution
+print("EDA: DIM_REGION")
+
+print(f"\nDim_Region — Shape: {dim_region.shape}")
+print(f"  Duplicates: {dim_region.duplicated().sum()}")
+
+missing = dim_region.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(dim_region) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print(f"\n  Missing Values:")
+display(missing_df)
+
+print(f"\n  All Regions:")
+display(dim_region)
+
+print(f"\n  Zone Distribution:")
+display(dim_region["Zone"].value_counts(dropna=False))
+
+print(f"\n  State Distribution:")
+display(dim_region["State"].value_counts(dropna=False))
+
+# Chart
+zone   = dim_region["Zone"].value_counts(dropna=False)
+labels = [str(l) for l in zone.index]
+values = list(zone.values)
+colors = ["#2E4A6E","#70AD47","#E63946","#F39C12"][:len(labels)]
+
+fig, ax = plt.subplots(figsize=(10, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(range(len(labels)), values, color=colors, width=0.5, zorder=2)
+for bar, val in zip(bars, values):
+    ax.text(bar.get_x() + bar.get_width()/2,
+            bar.get_height() + max(values)*0.02,
+            f"{val}\n({val/len(dim_region)*100:.1f}%)",
+            ha="center", va="bottom",
+            fontsize=11, fontweight="bold", color="black")
+
+ax.plot(range(len(values)), values, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=8, zorder=3, label="Trend")
+
+ax.set_title("Dim_Region — Zone Distribution",
+             fontsize=16, fontweight="bold", color="black", pad=20)
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels, fontsize=11, color="black")
+ax.set_ylabel("Count", fontsize=12, fontweight="bold", color="black")
+ax.set_xlabel("Zone", fontsize=12, fontweight="bold", color="black")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.spines["left"].set_linewidth(1.2)
+ax.spines["bottom"].set_linewidth(1.2)
+ax.tick_params(axis='x', colors='black')
+ax.tick_params(axis='y', colors='black')
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=1)
+ax.legend(facecolor="white", edgecolor="black")
+ax.margins(y=0.3)
+plt.tight_layout()
+plt.show()
