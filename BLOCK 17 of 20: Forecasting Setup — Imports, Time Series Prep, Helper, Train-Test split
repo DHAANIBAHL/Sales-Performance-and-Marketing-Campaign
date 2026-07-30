@@ -1,0 +1,107 @@
+# ============================================================
+# BLOCK 17 of 20: Forecasting Setup — Imports, Time Series Prep, Helper, Train/Test Split
+# ============================================================
+
+# ----- Original Cell #75 -----
+# INSTALL & IMPORTS
+#!pip install prophet -q
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
+
+#from prophet import Prophet
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+
+# ----- Original Cell #76 -----
+# STEP 1 — SETUP & IMPORTS
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
+import shutil
+
+DRIVE_FILE = "/content/drive/MyDrive/Car Sales.xlsx"
+LOCAL_FILE  = "/content/Car Sales.xlsx"
+shutil.copy(DRIVE_FILE, LOCAL_FILE)
+
+all_sheets   = pd.read_excel(LOCAL_FILE, sheet_name=None)
+fvs          = all_sheets["Fact_VehicleSales"]
+ftd          = all_sheets["Fact_TestDrive"]
+fmc          = all_sheets["Fact_MarketingCampaignPerforman"]
+dim_date     = all_sheets["Dim_Date"]
+dim_vehicle  = all_sheets["Dim_Vehicle"]
+dim_customer = all_sheets["Dim_Customer"]
+dim_dealer   = all_sheets["Dim_Dealer"]
+dim_region   = all_sheets["Dim_Region"]
+dim_channel  = all_sheets["Dim_Channel"]
+dim_campaign = all_sheets["Dim_Campaign"]
+dim_exec     = all_sheets["Dim_SalesExecutive"]
+
+print("Step 1 Complete — All sheets loaded")
+print(f"Fact_VehicleSales: {len(fvs):,} rows")
+print(f"Dim_Date: {len(dim_date):,} rows")
+
+# ----- Original Cell #77 -----
+# STEP 2 PREPARE TIME SERIES DATA (rebuilt for 72-month data)
+fvs_dated = fvs.merge(dim_date[['DateKey', 'Date']], on='DateKey', how='left')
+fvs_dated['Date'] = pd.to_datetime(fvs_dated['Date'])
+
+monthly = (
+    fvs_dated.groupby(pd.Grouper(key='Date', freq='MS'))
+    .agg(UnitsSold=('UnitsSold', 'sum'), SaleAmount=('SaleAmount', 'sum'))
+    .reset_index()
+)
+
+print(f"Monthly data shape: {monthly.shape}")
+print(monthly.head(5))
+print(monthly.tail(5))
+print("\nStep 2 Complete — Monthly time series ready")
+
+# ----- Original Cell #78 -----
+# STEP 3 — HELPER FUNCTION
+
+def pretty(df, title, number, format_cols=None):
+    """Print a numbered, formatted table with a title."""
+    df = df.copy().reset_index(drop=True)
+    df.index = df.index + 1
+    if format_cols:
+        for col, fmt in format_cols.items():
+            if col in df.columns:
+                if fmt == "currency":
+                    df[col] = df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+                elif fmt == "pct":
+                    df[col] = df[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+                elif fmt == "pct2":
+                    df[col] = df[col].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "—")
+                elif fmt == "int":
+                    df[col] = df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "—")
+                elif fmt == "float2":
+                    df[col] = df[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+    divider = "─" * 90
+    print(f"\n{divider}")
+    print(f"  {number}. {title}")
+    print(divider)
+    print(df.to_string())
+    print(divider)
+
+print("Step 3 Complete — pretty() function ready")
+
+# ----- Original Cell #79 -----
+# STEP 4 — TRAIN / TEST SPLIT
+TARGET = 'UnitsSold'
+FORECAST_HORIZON = 12
+
+train = monthly.iloc[:-FORECAST_HORIZON]
+test  = monthly.iloc[-FORECAST_HORIZON:]
+
+print(f"Train: {train['Date'].min().date()} → {train['Date'].max().date()}  ({len(train)} months)")
+print(f"Test : {test['Date'].min().date()}  → {test['Date'].max().date()}   ({len(test)} months)")
+print("\nStep 4 Complete — Train/Test split ready")
