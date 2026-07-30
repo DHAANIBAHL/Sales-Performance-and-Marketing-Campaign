@@ -1,0 +1,293 @@
+# ============================================================
+# BLOCK 11 of 20: EDA — Marketing Merge, Channel, Campaign, Sales Exec Distributions
+# ============================================================
+
+# ----- Original Cell #24 -----
+mktg = (
+    fmc
+    .merge(dim_campaign, on="CampaignKey", how="left")
+    .merge(dim_channel,  on="ChannelKey",  how="left", suffixes=("","_chan"))
+    .merge(dim_date,     on="DateKey",     how="left", suffixes=("","_date"))
+)
+print(f"mktg rebuilt — {mktg.shape}")
+
+sales_by_medium = (
+    mktg
+    .groupby('Medium', as_index=False)
+    .agg(TotalRevenue=('RevenueGenerated', 'sum'),
+         Transactions=('CampaignFactKey', 'count'))
+)
+sales_by_medium['Pct'] = (sales_by_medium['TotalRevenue'] / sales_by_medium['TotalRevenue'].sum() * 100).round(1)
+
+print(sales_by_medium)
+
+# ----- Original Cell #25 -----
+# 11. Dim_Channel: Channel Type Distribution
+
+sales_by_medium = (
+    fvs
+    .merge(dim_channel[['ChannelKey', 'Medium']], on='ChannelKey', how='left')
+    .groupby('Medium', as_index=False)
+    .agg(TotalRevenue=('SaleAmount', 'sum'),
+         Transactions=('SalesKey', 'count'))
+)
+sales_by_medium['Pct'] = (sales_by_medium['TotalRevenue'] / sales_by_medium['TotalRevenue'].sum() * 100).round(1)
+print("EDA: DIM_CHANNEL")
+
+print(f"\nDim_Channel — Shape: {dim_channel.shape}")
+print(f"  Duplicates: {dim_channel.duplicated().sum()}")
+
+missing = dim_channel.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(dim_channel) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print(f"\n  Missing Values:")
+display(missing_df)
+
+print(f"\n  All Channels:")
+display(dim_channel)
+
+print(f"\n  ChannelType Distribution:")
+display(dim_channel["ChannelType"].value_counts(dropna=False))
+
+print(f"\n  Online vs Offline:")
+display(dim_channel["Medium"].value_counts(dropna=False))
+
+# Chart
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
+fig, ax = plt.subplots(figsize=(8, 5.5))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+colors = ["#2E4A6E", "#7FB77E"]
+bars = ax.bar(sales_by_medium["Medium"], sales_by_medium["TotalRevenue"],
+              color=colors, width=0.5, edgecolor="white")
+
+for bar, val, txn, pct in zip(bars, sales_by_medium["TotalRevenue"],
+                                sales_by_medium["Transactions"], sales_by_medium["Pct"]):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + bar.get_height()*0.01,
+            f"${val/1e9:.2f}B\n{txn:,} txns ({pct}%)",
+            ha="center", va="bottom", fontsize=10, fontweight="bold", color="#333")
+
+ax.set_title("Total Revenue by Medium (Online vs Offline)", fontsize=14, fontweight="bold", pad=15)
+ax.set_ylabel("Total Revenue ($)", fontsize=11)
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v/1e9:.1f}B"))
+
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.grid(axis="y", linestyle="--", alpha=0.25)
+ax.margins(y=0.2)
+
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #26 -----
+# Normalize Quarter to a consistent string format before analysis
+dim_date["Quarter"] = dim_date["Quarter"].astype(str)
+dim_date["Quarter"] = dim_date["Quarter"].apply(lambda x: x if x.startswith("Q") else f"Q{x}")
+
+print(dim_date["Quarter"].value_counts().sort_index())
+
+# ----- Original Cell #27 -----
+# 12. Dim_Campaign: Campaign Type Distribution
+print("EDA: DIM_CAMPAIGN & DIM_SALESEXECUTIVE & DIM_DATE")
+
+dim_campaign["StartDate"] = pd.to_datetime(dim_campaign["StartDate"])
+dim_campaign["EndDate"]   = pd.to_datetime(dim_campaign["EndDate"])
+dim_campaign["Duration"]  = (dim_campaign["EndDate"] - dim_campaign["StartDate"]).dt.days
+
+print(f"\nDim_Campaign — Shape: {dim_campaign.shape}")
+print(f"  Duplicates: {dim_campaign.duplicated().sum()}")
+print(f"  Invalid Dates (End < Start): {(dim_campaign['EndDate'] < dim_campaign['StartDate']).sum()}")
+print(f"  Zero/Negative Budget:        {(dim_campaign['Budget'] <= 0).sum()}")
+print(f"\n  Budget Stats:")
+display(dim_campaign["Budget"].describe().round(2))
+print(f"\n  CampaignType Distribution:")
+display(dim_campaign["CampaignType"].value_counts())
+
+print(f"\nDim_SalesExecutive — Shape: {dim_exec.shape}")
+print(f"  Duplicates: {dim_exec.duplicated().sum()}")
+print(f"\n  Experience Stats:")
+display(dim_exec["Experience"].describe().round(2))
+
+print(f"\nDim_Date — Shape: {dim_date.shape}")
+dim_date["Date"] = pd.to_datetime(dim_date["Date"])
+print(f"  Date Range: {dim_date['Date'].min().date()} → {dim_date['Date'].max().date()}")
+print(f"  Years: {dim_date['Year'].unique().tolist()}")
+display(dim_date["Quarter"].value_counts().sort_index())
+
+# Chart
+import matplotlib.pyplot as plt
+
+ctype  = dim_campaign["CampaignType"].value_counts()
+labels = list(ctype.index)
+values = list(ctype.values)
+
+colors = ["#2E4A6E","#3A6B9E","#E63946","#70AD47",
+          "#9B59B6","#F39C12","#1ABC9C","#E67E22"][:len(labels)]
+
+fig, ax = plt.subplots(figsize=(14, 6))
+
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(
+    range(len(labels)),
+    values,
+    color=colors,
+    width=0.6,
+    zorder=2
+)
+
+for bar, val in zip(bars, values):
+    ax.text(
+        bar.get_x() + bar.get_width()/2,
+        bar.get_height() + max(values)*0.02,
+        f"{val}\n({val/len(dim_campaign)*100:.1f}%)",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+        color="black"
+    )
+
+ax.plot(
+    range(len(values)),
+    values,
+    color="#F4C542",
+    marker="o",
+    linewidth=2.5,
+    markersize=8,
+    zorder=3,
+    label="Trend"
+)
+
+ax.set_title(
+    "Dim_Campaign — Campaign Type Distribution",
+    fontsize=16,
+    fontweight="bold",
+    color="black",
+    pad=20
+)
+
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(
+    labels,
+    fontsize=11,
+    rotation=15,
+    color="black"
+)
+
+ax.set_ylabel(
+    "Count",
+    fontsize=12,
+    fontweight="bold",
+    color="black"
+)
+
+ax.set_xlabel(
+    "Campaign Type",
+    fontsize=12,
+    fontweight="bold",
+    color="black"
+)
+
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+
+ax.spines["left"].set_linewidth(1.2)
+ax.spines["bottom"].set_linewidth(1.2)
+
+ax.tick_params(axis='x', colors='black')
+ax.tick_params(axis='y', colors='black')
+
+ax.grid(
+    axis='y',
+    linestyle='--',
+    alpha=0.3,
+    zorder=1
+)
+
+ax.legend(
+    facecolor="white",
+    edgecolor="black"
+)
+
+plt.tight_layout()
+plt.show()
+
+# ----- Original Cell #28 -----
+# 14. Dim_SalesExecutive: Experience Distribution
+print("EDA: DIM_SALESEXECUTIVE")
+
+print(f"\nDim_SalesExecutive — Shape: {dim_exec.shape}")
+print(f"  Duplicates: {dim_exec.duplicated().sum()}")
+
+missing = dim_exec.isnull().sum()
+missing_df = pd.DataFrame({
+    "Column":        missing.index,
+    "Missing Count": missing.values,
+    "Missing %":     (missing.values / len(dim_exec) * 100).round(2)
+})
+missing_df = missing_df[missing_df["Missing Count"] > 0].reset_index(drop=True)
+print(f"\n  Missing Values:")
+display(missing_df)
+
+print(f"\n  Experience Statistics (years):")
+display(dim_exec["Experience"].describe().round(2))
+
+print(f"\n  Experience Distribution:")
+display(dim_exec["Experience"].value_counts().sort_index())
+
+print(f"\n  Executives per Dealer (top 10):")
+display(dim_exec.groupby("DealerKey")["SalesExecKey"].count()
+        .sort_values(ascending=False).head(10))
+
+# Chart
+exp    = dim_exec["Experience"].value_counts().sort_index()
+labels = [str(l) for l in exp.index]
+values = list(exp.values)
+
+fig, ax = plt.subplots(figsize=(14, 6))
+fig.patch.set_facecolor("white")
+ax.set_facecolor("white")
+
+bars = ax.bar(range(len(labels)), values, color="#2E4A6E", width=0.7, zorder=2)
+for bar, val in zip(bars, values):
+    if val > 0:
+        ax.text(bar.get_x() + bar.get_width()/2,
+                bar.get_height() + max(values)*0.02,
+                f"{val}", ha="center", va="bottom",
+                fontsize=9, fontweight="bold", color="black")
+
+ax.plot(range(len(values)), values, color="#F4C542",
+        marker="o", linewidth=2.5, markersize=6, zorder=3, label="Trend")
+
+ax.set_title("Dim_SalesExecutive — Experience Distribution",
+             fontsize=16, fontweight="bold", color="black", pad=20)
+ax.set_xticks(range(len(labels)))
+ax.set_xticklabels(labels, fontsize=10, color="black",
+                   rotation=45 if len(labels) > 15 else 0)
+ax.set_ylabel("Count", fontsize=12, fontweight="bold", color="black")
+ax.set_xlabel("Years of Experience", fontsize=12, fontweight="bold", color="black")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["left"].set_color("black")
+ax.spines["bottom"].set_color("black")
+ax.spines["left"].set_linewidth(1.2)
+ax.spines["bottom"].set_linewidth(1.2)
+ax.tick_params(axis='x', colors='black')
+ax.tick_params(axis='y', colors='black')
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=1)
+ax.legend(facecolor="white", edgecolor="black")
+ax.margins(y=0.3)
+plt.tight_layout()
+plt.show()
